@@ -110,7 +110,7 @@ async function handleMcpMessage(msg, runner) {
       result: {
         protocolVersion: msg.params?.protocolVersion || '2025-11-25',
         capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: 'exec-mcp', version: '0.2.0' }
+        serverInfo: { name: 'exec-mcp', version: '0.2.1' }
       }
     };
   }
@@ -158,15 +158,15 @@ async function handleMcpMessage(msg, runner) {
 function execToolSchema() {
   return {
     name: 'exec',
-    description: 'Execute a shell command on the configured remote environment and return bounded stdout/stderr tail plus structured summary.',
+    description: 'Execute one shell command on the configured remote execution host and return a bounded final text result with stdout/stderr tails plus an exec summary. The command runs through /bin/sh -c after cwd allowlist validation. This tool is for general remote shell operations only; it is not a GitOps, Kubernetes, or file-management API. Output may be truncated. The final [exec summary] is authoritative for exit code, signal, timeout, duration, byte counts, and truncation. stderr output alone does not mean failure; non-zero exit code, signal, or timed_out=true means failure. Concurrency is bounded; too_many_active_execs means the active exec limit is currently reached and includes active/max/oldest_age_seconds/states for diagnosis.',
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'Shell command to execute.' },
-        cwd: { type: 'string', description: 'Working directory. Must be under the configured allowlist.' },
-        timeout_seconds: { type: 'integer', minimum: 1, description: 'Execution timeout in seconds.' },
-        max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum bytes forwarded before truncation.' },
-        env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Extra environment variables.' }
+        command: { type: 'string', description: 'Command string to run via /bin/sh -c on the configured remote execution host. Use explicit quoting for pipelines, redirection, &&, and environment expansion. Avoid interactive or unbounded long-running commands.' },
+        cwd: { type: 'string', description: 'Working directory on the remote execution host. It must be under the configured allowlist. If omitted, the server uses DEFAULT_CWD.' },
+        timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime in seconds before the command is aborted. Values above MAX_TIMEOUT_SECONDS are rejected. On timeout the server sends SIGTERM, then SIGKILL after the configured kill grace period.' },
+        max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. The final summary includes byte counts, truncation status, and bounded stdout/stderr tails.' },
+        env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables for the command. Invalid variable names are ignored. ENV and BASH_ENV are removed before spawning.' }
       },
       required: ['command'],
       additionalProperties: false
