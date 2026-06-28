@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+coverage
+dist
+*.log
+*.tgz
+.env
+known_hosts
+RUNBOOK.md
+test

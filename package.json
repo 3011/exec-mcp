@@ -1,0 +1,19 @@
+{
+  "name": "exec-mcp",
+  "version": "0.1.0",
+  "description": "Bounded streaming exec gateway prototype for MCP-style remote operations",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "build": "node --check src/*.js && node --check test/*.test.js",
+    "validate": "bash scripts/validate.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

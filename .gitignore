@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+dist/
+*.log
+*.tgz
+.env
+.env.*
+known_hosts
