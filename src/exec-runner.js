@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { RingBuffer } from './ring-buffer.js';
 import { redact } from './redact.js';
+import { ExecRegistry, TooManyActiveExecsError } from './exec-registry.js';
 
 export class ExecRejectedError extends Error {
   constructor(code, message) {
@@ -15,7 +15,7 @@ export class ExecRejectedError extends Error {
 export class ExecRunner {
   constructor(config) {
     this.config = config;
-    this.active = 0;
+    this.registry = new ExecRegistry({ maxActive: config.maxConcurrentExecs });
     this.metrics = {
       requestsTotal: 0,
       rejectedTotal: new Map(),
@@ -27,6 +27,10 @@ export class ExecRunner {
       outputBytesTotal: { stdout: 0, stderr: 0 },
       durationMsTotal: 0
     };
+  }
+
+  get active() {
+    return this.registry.activeCount;
   }
 
   validate(input) {
@@ -66,10 +70,6 @@ export class ExecRunner {
 
   async run(input, emit, options = {}) {
     this.metrics.requestsTotal++;
-    if (this.active >= this.config.maxConcurrentExecs) {
-      this.bumpRejected('too_many_active_execs');
-      throw new ExecRejectedError('too_many_active_execs', 'too many active execs');
-    }
 
     let req;
     try {
@@ -78,8 +78,19 @@ export class ExecRunner {
       if (err instanceof ExecRejectedError) this.bumpRejected(err.code);
       throw err;
     }
-    this.active++;
-    const execId = randomUUID();
+
+    let rec;
+    try {
+      rec = this.registry.acquire({ timeoutMs: req.timeoutSeconds * 1000 });
+    } catch (err) {
+      if (err instanceof TooManyActiveExecsError) {
+        this.bumpRejected(err.code);
+        throw new ExecRejectedError(err.code, err.message);
+      }
+      throw err;
+    }
+
+    const execId = rec.id;
     let seq = 0;
     let stdoutBytes = 0;
     let stderrBytes = 0;
@@ -88,66 +99,19 @@ export class ExecRunner {
     let timedOut = false;
     let killedSignal = null;
     let childExited = false;
-    const startedAt = new Date();
+    let timeoutCounted = false;
+    let disconnectCounted = false;
+    let heartbeat = null;
+    let sigkillTimer = null;
+    const startedAt = new Date(rec.startedAt);
     const stdoutTail = new RingBuffer(this.config.ringBufferBytes);
     const stderrTail = new RingBuffer(this.config.ringBufferBytes);
 
     const send = (event) => emit({ exec_id: execId, ...event });
 
     let child;
-    try {
-      const spawned = spawnCommand(this.config, req);
-      child = spawned.child;
-      if (spawned.stdin) child.stdin.end(spawned.stdin);
-    } catch (err) {
-      this.active--;
-      this.bumpRejected('spawn_failed');
-      throw new ExecRejectedError('spawn_failed', err.message);
-    }
-
-    send({ type: 'start', pid: child.pid, started_at: startedAt.toISOString(), cwd: req.cwd });
-
-    const maybeForward = (stream, chunk) => {
-      const len = chunk.length;
-      if (stream === 'stdout') {
-        stdoutBytes += len;
-        this.metrics.outputBytesTotal.stdout += len;
-        stdoutTail.append(chunk);
-      } else {
-        stderrBytes += len;
-        this.metrics.outputBytesTotal.stderr += len;
-        stderrTail.append(chunk);
-      }
-
-      if (forwardedBytes < req.maxOutputBytes) {
-        const remain = req.maxOutputBytes - forwardedBytes;
-        const toSend = len > remain ? chunk.subarray(0, remain) : chunk;
-        forwardedBytes += toSend.length;
-        send({ type: stream, data: redact(toSend.toString('utf8')), seq: ++seq });
-      }
-
-      if (!truncated && stdoutBytes + stderrBytes > req.maxOutputBytes) {
-        truncated = true;
-        this.metrics.truncatedTotal++;
-        send({ type: 'truncated', stream: 'combined', max_output_bytes: req.maxOutputBytes });
-      }
-    };
-
-    child.stdout.on('data', (chunk) => maybeForward('stdout', chunk));
-    child.stderr.on('data', (chunk) => maybeForward('stderr', chunk));
-
-    const heartbeat = setInterval(() => {
-      send({
-        type: 'heartbeat',
-        elapsed_ms: Date.now() - startedAt.getTime(),
-        stdout_bytes: stdoutBytes,
-        stderr_bytes: stderrBytes
-      });
-    }, this.config.heartbeatSeconds * 1000);
-    heartbeat.unref?.();
-
     const killGroup = (signal) => {
-      if (childExited || !child.pid) return;
+      if (childExited || !child?.pid) return;
       killedSignal = signal;
       try {
         process.kill(-child.pid, signal);
@@ -157,59 +121,137 @@ export class ExecRunner {
       }
     };
 
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      this.metrics.timeoutTotal++;
-      send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'sigterm' });
-      killGroup('SIGTERM');
-      setTimeout(() => {
+    const scheduleSigkill = () => {
+      if (sigkillTimer) return;
+      sigkillTimer = setTimeout(() => {
         if (!childExited) {
-          send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'sigkill' });
+          if (timedOut) send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'sigkill' });
           killGroup('SIGKILL');
         }
-      }, this.config.killGraceSeconds * 1000).unref?.();
-    }, req.timeoutSeconds * 1000);
-    timeout.unref?.();
-
-    const abortSignal = options.abortSignal;
-    const onAbort = () => {
-      this.metrics.streamDisconnectTotal++;
-      killGroup('SIGTERM');
-      setTimeout(() => killGroup('SIGKILL'), this.config.killGraceSeconds * 1000).unref?.();
+      }, this.config.killGraceSeconds * 1000);
+      sigkillTimer.unref?.();
     };
-    abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-    return await new Promise((resolveRun) => {
-      child.on('error', (err) => {
-        send({ type: 'error', code: 'spawn_failed', message: err.message });
-      });
+    const onRegistryAbort = () => {
+      const reasonCode = abortReasonCode(rec.controller.signal.reason);
+      if (reasonCode === 'exec_timeout' || reasonCode === 'exec_reaper_abort') {
+        timedOut = true;
+        if (!timeoutCounted) {
+          timeoutCounted = true;
+          this.metrics.timeoutTotal++;
+        }
+        send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'sigterm', reason: reasonCode });
+      } else if (!disconnectCounted) {
+        disconnectCounted = true;
+        this.metrics.streamDisconnectTotal++;
+      }
+      killGroup('SIGTERM');
+      scheduleSigkill();
+    };
 
-      child.on('exit', (code, signal) => {
-        childExited = true;
-        clearTimeout(timeout);
-        clearInterval(heartbeat);
-        abortSignal?.removeEventListener('abort', onAbort);
-        const durationMs = Date.now() - startedAt.getTime();
-        this.metrics.durationMsTotal += durationMs;
-        this.bumpMap(this.metrics.exitCodeTotal, String(code ?? signal ?? 'null'));
-        this.active--;
+    const clientAbortSignal = options.abortSignal;
+    const onClientAbort = () => {
+      this.registry.abort(rec.id, 'client_closed_aborting', new Error('client_closed'));
+    };
 
-        const summary = {
-          type: 'exit',
-          code,
-          signal: signal || killedSignal,
-          duration_ms: durationMs,
+    try {
+      const spawned = spawnCommand(this.config, req);
+      child = spawned.child;
+      if (spawned.stdin) child.stdin.end(spawned.stdin);
+
+      rec.controller.signal.addEventListener('abort', onRegistryAbort, { once: true });
+      clientAbortSignal?.addEventListener('abort', onClientAbort, { once: true });
+
+      send({ type: 'start', pid: child.pid, started_at: startedAt.toISOString(), cwd: req.cwd });
+
+      const maybeForward = (stream, chunk) => {
+        const len = chunk.length;
+        if (stream === 'stdout') {
+          stdoutBytes += len;
+          this.metrics.outputBytesTotal.stdout += len;
+          stdoutTail.append(chunk);
+        } else {
+          stderrBytes += len;
+          this.metrics.outputBytesTotal.stderr += len;
+          stderrTail.append(chunk);
+        }
+
+        if (forwardedBytes < req.maxOutputBytes) {
+          const remain = req.maxOutputBytes - forwardedBytes;
+          const toSend = len > remain ? chunk.subarray(0, remain) : chunk;
+          forwardedBytes += toSend.length;
+          send({ type: stream, data: redact(toSend.toString('utf8')), seq: ++seq });
+        }
+
+        if (!truncated && stdoutBytes + stderrBytes > req.maxOutputBytes) {
+          truncated = true;
+          this.metrics.truncatedTotal++;
+          send({ type: 'truncated', stream: 'combined', max_output_bytes: req.maxOutputBytes });
+        }
+      };
+
+      child.stdout.on('data', (chunk) => maybeForward('stdout', chunk));
+      child.stderr.on('data', (chunk) => maybeForward('stderr', chunk));
+
+      heartbeat = setInterval(() => {
+        send({
+          type: 'heartbeat',
+          elapsed_ms: Date.now() - startedAt.getTime(),
           stdout_bytes: stdoutBytes,
-          stderr_bytes: stderrBytes,
-          truncated,
-          timed_out: timedOut,
-          stdout_tail: redact(stdoutTail.toString()),
-          stderr_tail: redact(stderrTail.toString())
+          stderr_bytes: stderrBytes
+        });
+      }, this.config.heartbeatSeconds * 1000);
+      heartbeat.unref?.();
+
+      return await new Promise((resolveRun) => {
+        let finished = false;
+
+        const finish = (code, signal) => {
+          if (finished) return;
+          finished = true;
+          childExited = true;
+
+          const durationMs = Date.now() - startedAt.getTime();
+          this.metrics.durationMsTotal += durationMs;
+          this.bumpMap(this.metrics.exitCodeTotal, String(code ?? signal ?? 'null'));
+
+          const summary = {
+            type: 'exit',
+            code,
+            signal: signal || killedSignal,
+            duration_ms: durationMs,
+            stdout_bytes: stdoutBytes,
+            stderr_bytes: stderrBytes,
+            truncated,
+            timed_out: timedOut,
+            stdout_tail: redact(stdoutTail.toString()),
+            stderr_tail: redact(stderrTail.toString())
+          };
+          send(summary);
+          resolveRun({ exec_id: execId, ...summary });
         };
-        send(summary);
-        resolveRun({ exec_id: execId, ...summary });
+
+        child.on('error', (err) => {
+          send({ type: 'error', code: 'spawn_failed', message: err.message });
+        });
+
+        child.on('exit', () => {
+          childExited = true;
+        });
+
+        child.on('close', finish);
       });
-    });
+    } catch (err) {
+      if (!child) this.bumpRejected('spawn_failed');
+      if (err instanceof ExecRejectedError) throw err;
+      throw new ExecRejectedError('spawn_failed', err.message);
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
+      rec.controller.signal.removeEventListener('abort', onRegistryAbort);
+      clientAbortSignal?.removeEventListener('abort', onClientAbort);
+      this.registry.release(rec.id);
+    }
   }
 
   bumpRejected(reason) {
@@ -220,8 +262,10 @@ export class ExecRunner {
     map.set(key, (map.get(key) || 0) + 1);
   }
 }
-
-
+function abortReasonCode(reason) {
+  if (reason instanceof Error && reason.message) return reason.message;
+  return String(reason || 'aborted');
+}
 
 function spawnCommand(config, req) {
   if (config.execMode === 'remote') {

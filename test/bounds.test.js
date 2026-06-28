@@ -87,8 +87,12 @@ test('concurrency limit rejects extra active execs', async () => {
   await new Promise((resolve) => setTimeout(resolve, 50));
   await assert.rejects(
     () => runner.run({ command: 'echo second', cwd: '/tmp' }, () => {}),
-    (err) => err instanceof ExecRejectedError && err.code === 'too_many_active_execs'
+    (err) => err instanceof ExecRejectedError
+      && err.code === 'too_many_active_execs'
+      && /active=1 max=1 oldest_age_seconds=/.test(err.message)
+      && /states=running:1/.test(err.message)
   );
+  assert.equal(runner.active, 1);
   const summary = await first;
   assert.equal(summary.code, 0);
 });
