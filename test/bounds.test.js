@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseConfig } from '../src/config.js';
 import { ExecRunner, ExecRejectedError } from '../src/exec-runner.js';
+import { remoteTestEnv } from '../scripts/helpers.js';
 
 function makeRunner(overrides = {}) {
   return new ExecRunner(parseConfig({
@@ -15,6 +16,7 @@ function makeRunner(overrides = {}) {
     MAX_CONCURRENT_EXECS: '2',
     RING_BUFFER_BYTES: '32',
     KILL_GRACE_SECONDS: '1',
+    ...remoteTestEnv(),
     ...overrides
   }));
 }

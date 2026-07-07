@@ -1,8 +1,8 @@
 # exec-mcp
 
-A dependency-free Node.js implementation for a bounded remote exec MCP gateway.
+A dependency-free Node.js implementation for a bounded SSH remote execution MCP gateway.
 
-It intentionally exposes one capability: run a single bounded remote shell command and return a capped result with stdout/stderr tails plus an authoritative exec summary. It is not a GitOps API, not a Kubernetes API, and not a file-management API. Higher-level tools such as kubectl, git, docker, helm, argocd, and flux are left to the remote shell.
+It exposes bounded remote command execution plus base64 file upload/download over SSH. It is not a GitOps API and not a Kubernetes API. Higher-level tools such as kubectl, git, docker, helm, argocd, and flux are left to the remote shell.
 
 ## Current interface
 
@@ -11,13 +11,15 @@ It intentionally exposes one capability: run a single bounded remote shell comma
 - `POST /exec` with `Accept: text/event-stream` for SSE event streaming
 - `POST /mcp` for MCP Streamable HTTP / JSON-RPC tool calls
 
-The MCP server exposes exactly one tool:
+The MCP server exposes these tools:
 
 ```text
 exec
+download_file
+upload_file
 ```
 
-The tool executes one command on the configured remote execution host. In the current dev deployment, the `ssh-mcp` connector runs commands on `dev-debian` through SSH.
+All tools operate on the configured remote execution host. In the current dev deployment, the `ssh-mcp` connector runs commands and file transfers on `dev-debian` through SSH.
 
 ## MCP tool contract
 
@@ -42,6 +44,58 @@ Field semantics:
 - `timeout_seconds`: maximum runtime. Values above `MAX_TIMEOUT_SECONDS` are rejected. On timeout, the server aborts the exec and sends `SIGTERM`, then `SIGKILL` after the configured kill grace period.
 - `max_output_bytes`: maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. Final byte counts and bounded tails are included in the summary.
 - `env`: additional environment variables. Invalid variable names are ignored. `ENV` and `BASH_ENV` are removed before spawning.
+
+File download arguments:
+
+```json
+{
+  "path": "assets/logo.png",
+  "max_bytes": 10485760
+}
+```
+
+File download result:
+
+```json
+{
+  "path": "/root/exec-mcp/assets/logo.png",
+  "bytes": 12345,
+  "mime_type": "image/png",
+  "data_base64": "..."
+}
+```
+
+File upload arguments:
+
+```json
+{
+  "path": "uploads/report.xlsx",
+  "data_base64": "...",
+  "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "append": false
+}
+```
+
+File upload result:
+
+```json
+{
+  "path": "/root/exec-mcp/uploads/report.xlsx",
+  "bytes": 12345,
+  "action": "write",
+  "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+}
+```
+
+File tool semantics:
+
+- `download_file` returns remote raw file bytes as `data_base64` after path allowlist validation.
+- `download_file.max_bytes` is the maximum allowed file size. If omitted, `FILE_MAX_DOWNLOAD_BYTES` is used. Files over the limit are rejected, not truncated.
+- `upload_file` writes remote raw file bytes from `data_base64` after path allowlist validation and decoded-size checks.
+- `upload_file.data_base64` must decode to at most `FILE_MAX_UPLOAD_BYTES`.
+- `upload_file.append=true` appends decoded bytes; otherwise it replaces the file.
+- `MCP_MAX_REQUEST_BYTES` must be large enough for upload JSON bodies. Base64 expands raw bytes by roughly 33%.
+- Parent directories must already exist.
 
 Output semantics:
 
@@ -78,7 +132,7 @@ npm start
 Current local validation:
 
 ```text
-node --test: 32 tests, 32 pass
+node --test: 33 tests, 33 pass
 npm run build: pass
 npm run validate: pass
 ```

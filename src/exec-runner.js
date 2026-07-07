@@ -268,40 +268,33 @@ function abortReasonCode(reason) {
 }
 
 function spawnCommand(config, req) {
-  if (config.execMode === 'remote') {
-    if (!config.remote.host || !config.remote.keyPath) {
-      throw new Error('remote mode requires REMOTE_HOST and REMOTE_KEY_PATH');
-    }
-    const bin = config.remote.bin || String.fromCharCode(115, 115, 104);
-    const destination = `${config.remote.user}@${config.remote.host}`;
-    const args = [
-      '-i', config.remote.keyPath,
-      '-p', String(config.remote.port),
-      '-o', 'BatchMode=yes',
-      '-o', `ConnectTimeout=${config.remote.connectTimeoutSeconds}`,
-      '-o', `StrictHostKeyChecking=${config.remote.strictHostKeyChecking}`,
-      '-o', 'UserKnownHostsFile=' + config.remote.knownHostsPath,
-      '-o', 'LogLevel=ERROR',
-      destination,
-      '/bin/sh', '-s'
-    ];
-    const child = spawn(bin, args, {
-      cwd: '/tmp',
-      env: sanitizedEnv({}),
-      detached: true,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    return { child, stdin: buildRemoteScript(req) };
-  }
+  return spawnRemoteShell(config, buildRemoteScript(req));
+}
 
-  return {
-    child: spawn('/bin/sh', ['-c', req.command], {
-      cwd: req.cwd,
-      env: sanitizedEnv(req.env),
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-  };
+export function spawnRemoteShell(config, stdin) {
+  if (!config.remote.host || !config.remote.keyPath) {
+    throw new Error('remote execution requires REMOTE_HOST and REMOTE_KEY_PATH');
+  }
+  const destination = `${config.remote.user}@${config.remote.host}`;
+  const args = [
+    ...(config.remote.binArgs || []),
+    '-i', config.remote.keyPath,
+    '-p', String(config.remote.port),
+    '-o', 'BatchMode=yes',
+    '-o', `ConnectTimeout=${config.remote.connectTimeoutSeconds}`,
+    '-o', `StrictHostKeyChecking=${config.remote.strictHostKeyChecking}`,
+    '-o', 'UserKnownHostsFile=' + config.remote.knownHostsPath,
+    '-o', 'LogLevel=ERROR',
+    destination,
+    '/bin/sh', '-s'
+  ];
+  const child = spawn(config.remote.bin || 'ssh', args, {
+    cwd: '/tmp',
+    env: sanitizedEnv({}),
+    detached: true,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  return { child, stdin };
 }
 
 function buildRemoteScript(req) {

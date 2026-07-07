@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from '../src/server.js';
 import { parseConfig } from '../src/config.js';
+import { remoteTestEnv } from '../scripts/helpers.js';
 
 test('HTTP /healthz and /exec SSE work', async () => {
   const config = parseConfig({
@@ -11,7 +12,8 @@ test('HTTP /healthz and /exec SSE work', async () => {
     ALLOWED_CWDS: '/tmp',
     DEFAULT_CWD: '/tmp',
     HEARTBEAT_SECONDS: '99',
-    DEFAULT_TIMEOUT_SECONDS: '5'
+    DEFAULT_TIMEOUT_SECONDS: '5',
+    ...remoteTestEnv()
   });
   const { server } = createServer(config);
   server.listen(0, '127.0.0.1');

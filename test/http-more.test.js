@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from '../src/server.js';
 import { parseConfig } from '../src/config.js';
+import { remoteTestEnv } from '../scripts/helpers.js';
 
 async function withServer(overrides, fn) {
   const config = parseConfig({
@@ -14,6 +15,7 @@ async function withServer(overrides, fn) {
     DEFAULT_TIMEOUT_SECONDS: '5',
     DEFAULT_MAX_OUTPUT_BYTES: '1024',
     HARD_MAX_OUTPUT_BYTES: '2048',
+    ...remoteTestEnv(),
     ...overrides
   });
   const { server, runner } = createServer(config);

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseConfig } from '../src/config.js';
 import { ExecRunner } from '../src/exec-runner.js';
+import { remoteTestEnv } from '../scripts/helpers.js';
 
 function makeRunner(overrides = {}) {
   return new ExecRunner(parseConfig({
@@ -15,6 +16,7 @@ function makeRunner(overrides = {}) {
     MAX_CONCURRENT_EXECS: '2',
     RING_BUFFER_BYTES: '64',
     KILL_GRACE_SECONDS: '1',
+    ...remoteTestEnv(),
     ...overrides
   }));
 }
@@ -37,7 +39,7 @@ test('large output is drained, counted, truncated, and tail is bounded', async (
   const runner = makeRunner({ DEFAULT_MAX_OUTPUT_BYTES: '1024', HARD_MAX_OUTPUT_BYTES: '2048', RING_BUFFER_BYTES: '32' });
   const events = [];
   const summary = await runner.run({
-    command: `node -e "process.stdout.write('x'.repeat(100000))"`,
+    command: `python3 -c "import sys; sys.stdout.write('x' * 100000)"`,
     cwd: '/tmp',
     max_output_bytes: 1024
   }, (event) => events.push(event));

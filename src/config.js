@@ -13,12 +13,16 @@ export function parseConfig(env = process.env) {
     maxTimeoutSeconds: positiveInt(env.MAX_TIMEOUT_SECONDS, 600),
     defaultMaxOutputBytes: positiveInt(env.DEFAULT_MAX_OUTPUT_BYTES, 5 * 1024 * 1024),
     hardMaxOutputBytes: positiveInt(env.HARD_MAX_OUTPUT_BYTES, 20 * 1024 * 1024),
+    mcpMaxRequestBytes: positiveInt(env.MCP_MAX_REQUEST_BYTES, 16 * 1024 * 1024),
+    fileMaxDownloadBytes: positiveInt(env.FILE_MAX_DOWNLOAD_BYTES, 10 * 1024 * 1024),
+    fileMaxUploadBytes: positiveInt(env.FILE_MAX_UPLOAD_BYTES, 10 * 1024 * 1024),
     ringBufferBytes: positiveInt(env.RING_BUFFER_BYTES, 65536),
     maxConcurrentExecs: positiveInt(env.MAX_CONCURRENT_EXECS, 2),
     heartbeatSeconds: positiveInt(env.HEARTBEAT_SECONDS, 15),
     killGraceSeconds: positiveInt(env.KILL_GRACE_SECONDS, 5),
-    execMode: env.EXEC_MODE || 'local',
     remote: {
+      bin: env.REMOTE_BIN || 'ssh',
+      binArgs: splitArgs(env.REMOTE_BIN_ARGS || ''),
       host: env.REMOTE_HOST || '',
       port: positiveInt(env.REMOTE_PORT, 22),
       user: env.REMOTE_USER || 'root',
@@ -33,4 +37,8 @@ export function parseConfig(env = process.env) {
 function positiveInt(value, fallback) {
   const n = Number.parseInt(String(value), 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function splitArgs(value) {
+  return String(value).split(/\s+/).filter(Boolean);
 }

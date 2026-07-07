@@ -4,6 +4,7 @@ import { RingBuffer } from '../src/ring-buffer.js';
 import { redact } from '../src/redact.js';
 import { parseConfig } from '../src/config.js';
 import { ExecRunner, ExecRejectedError } from '../src/exec-runner.js';
+import { remoteTestEnv } from '../scripts/helpers.js';
 
 test('RingBuffer keeps only the last bytes', () => {
   const rb = new RingBuffer(5);
@@ -33,7 +34,8 @@ test('ExecRunner streams stdout/stderr and returns summary', async () => {
     DEFAULT_CWD: '/tmp',
     HEARTBEAT_SECONDS: '99',
     DEFAULT_TIMEOUT_SECONDS: '5',
-    DEFAULT_MAX_OUTPUT_BYTES: '1048576'
+    DEFAULT_MAX_OUTPUT_BYTES: '1048576',
+    ...remoteTestEnv()
   });
   const runner = new ExecRunner(config);
   const events = [];
@@ -54,7 +56,8 @@ test('ExecRunner truncates forwarding but still drains output', async () => {
     HEARTBEAT_SECONDS: '99',
     DEFAULT_TIMEOUT_SECONDS: '5',
     DEFAULT_MAX_OUTPUT_BYTES: '16',
-    RING_BUFFER_BYTES: '8'
+    RING_BUFFER_BYTES: '8',
+    ...remoteTestEnv()
   });
   const runner = new ExecRunner(config);
   const events = [];
@@ -76,7 +79,8 @@ test('ExecRunner times out and kills process group', async () => {
     HEARTBEAT_SECONDS: '99',
     DEFAULT_TIMEOUT_SECONDS: '1',
     MAX_TIMEOUT_SECONDS: '2',
-    KILL_GRACE_SECONDS: '1'
+    KILL_GRACE_SECONDS: '1',
+    ...remoteTestEnv()
   });
   const runner = new ExecRunner(config);
   const events = [];

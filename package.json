@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
-    "build": "node --check src/*.js && node --check test/*.test.js",
+    "build": "node --check src/*.js && node --check scripts/*.js && node --check test/*.test.js",
     "validate": "bash scripts/validate.sh"
   },
   "engines": {

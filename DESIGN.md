@@ -2,9 +2,9 @@
 
 ## Goal
 
-Build a minimal bounded remote exec gateway for MCP agents.
+Build a minimal bounded SSH remote execution gateway for MCP agents.
 
-The design exposes exactly one execution capability and leaves kubectl, helm, git, docker, argocd, flux, and other domain-specific semantics to the remote shell. The server is intentionally not a second GitOps API, not a file API, and not a Kubernetes wrapper.
+The design exposes bounded remote shell execution plus base64 file upload/download. It leaves kubectl, helm, git, docker, argocd, flux, and other domain-specific semantics to the remote shell. The server is intentionally not a second GitOps API and not a Kubernetes wrapper.
 
 ## Runtime choice
 
@@ -59,13 +59,17 @@ POST /mcp
 Content-Type: application/json
 ```
 
-The MCP server exposes a single tool named `exec`.
+The MCP server exposes these tools:
+
+- `exec`
+- `download_file`
+- `upload_file`
 
 Tool description requirements:
 
 - State that commands run on the configured remote execution host, not inside the agent runtime.
 - State that commands run through `/bin/sh -c` after cwd allowlist validation.
-- State that this is a general remote shell tool, not a GitOps/Kubernetes/file API.
+- State that `exec` is a general remote shell tool, not a GitOps/Kubernetes API.
 - State that output may be truncated.
 - State that `[exec summary]` is authoritative for exit code, signal, timeout, duration, byte counts, and truncation.
 - State that stderr alone is not failure.
@@ -76,6 +80,8 @@ MCP `tools/call` returns final text only. It does not expose live SSE events. Th
 ```text
 [exec summary] exit=<code> signal=<signal|null> duration_ms=<ms> stdout_bytes=<n> stderr_bytes=<n> truncated=<true|false> timed_out=<true|false>
 ```
+
+File tools return JSON text. `download_file` includes `data_base64`; `upload_file` accepts `data_base64`. Both validate paths against the remote `ALLOWED_CWDS` after resolving real paths, reject symlink escapes, and enforce file-size limits.
 
 Success/failure semantics:
 

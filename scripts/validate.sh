@@ -8,8 +8,15 @@ npm run build
 PORT_VALUE="${PORT:-18080}"
 LOG_FILE="/tmp/exec-mcp-validate.log"
 OUT_FILE="/tmp/exec-mcp-validate.sse"
+FAKE_SSH="$PWD/scripts/fake-ssh.js"
 rm -f "$LOG_FILE" "$OUT_FILE"
-PORT="$PORT_VALUE" HOST=127.0.0.1 node src/server.js >"$LOG_FILE" 2>&1 &
+PORT="$PORT_VALUE" \
+HOST=127.0.0.1 \
+REMOTE_BIN="${REMOTE_BIN:-$(command -v node)}" \
+REMOTE_BIN_ARGS="${REMOTE_BIN_ARGS:---no-warnings $FAKE_SSH}" \
+REMOTE_HOST="${REMOTE_HOST:-fake-remote}" \
+REMOTE_KEY_PATH="${REMOTE_KEY_PATH:-/tmp/fake-ssh-key}" \
+node src/server.js >"$LOG_FILE" 2>&1 &
 PID=$!
 cleanup() {
   kill "$PID" >/dev/null 2>&1 || true

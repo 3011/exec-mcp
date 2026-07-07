@@ -1,8 +1,21 @@
 import http from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { extname } from 'node:path';
 import { parseConfig } from './config.js';
-import { ExecRunner, ExecRejectedError } from './exec-runner.js';
+import { ExecRunner, ExecRejectedError, spawnRemoteShell } from './exec-runner.js';
+
+const DEFAULT_MCP_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+const DEFAULT_MAX_FILE_DOWNLOAD_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_FILE_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+class FileToolError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'FileToolError';
+    this.code = code;
+  }
+}
 
 export function createServer(config = parseConfig()) {
   const runner = new ExecRunner(config);
@@ -74,7 +87,7 @@ async function handleSseExec(req, res, runner) {
 }
 
 async function handleMcp(req, res, runner) {
-  const body = await readJson(req, 1024 * 1024);
+  const body = await readJson(req, runner.config.mcpMaxRequestBytes || DEFAULT_MCP_MAX_REQUEST_BYTES);
   const sessionId = req.headers['mcp-session-id'] || randomUUID();
   res.setHeader('mcp-session-id', sessionId);
   res.setHeader('content-type', 'application/json');
@@ -120,50 +133,55 @@ async function handleMcpMessage(msg, runner) {
   }
 
   if (method === 'tools/list') {
-    return { jsonrpc: '2.0', id, result: { tools: [execToolSchema()] } };
+    return { jsonrpc: '2.0', id, result: { tools: [execToolSchema(), downloadFileToolSchema(), uploadFileToolSchema()] } };
   }
 
   if (method === 'tools/call') {
     const name = msg.params?.name;
-    if (name !== 'exec') return jsonError(id, -32602, `Unknown tool: ${name}`);
     const args = msg.params?.arguments || {};
     try {
-      const events = [];
-      const summary = await runner.run(args, (event) => events.push(event));
-      const text = renderToolText(summary);
-      return {
-        jsonrpc: '2.0',
-        id,
-        result: {
-          content: [{ type: 'text', text }],
-          isError: summary.code !== 0 || summary.timed_out === true
-        }
-      };
+      if (name === 'exec') {
+        const events = [];
+        const summary = await runner.run(args, (event) => events.push(event));
+        const text = renderToolText(summary);
+        return toolResult(id, text, summary.code !== 0 || summary.timed_out === true);
+      }
+      if (name === 'download_file') {
+        return toolResult(id, await downloadFileTool(args, runner.config), false);
+      }
+      if (name === 'upload_file') {
+        return toolResult(id, await uploadFileTool(args, runner.config), false);
+      }
+      return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {
-      const code = err instanceof ExecRejectedError ? err.code : 'internal_error';
-      return {
-        jsonrpc: '2.0',
-        id,
-        result: {
-          content: [{ type: 'text', text: `${code}: ${err.message}` }],
-          isError: true
-        }
-      };
+      const code = err instanceof ExecRejectedError || err instanceof FileToolError ? err.code : 'internal_error';
+      return toolResult(id, `${code}: ${err.message}`, true);
     }
   }
 
   return jsonError(id, -32601, `Method not found: ${method}`);
 }
 
+function toolResult(id, text, isError) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    result: {
+      content: [{ type: 'text', text }],
+      isError
+    }
+  };
+}
+
 function execToolSchema() {
   return {
     name: 'exec',
-    description: 'Execute one shell command on the configured remote execution host and return a bounded final text result with stdout/stderr tails plus an exec summary. The command runs through /bin/sh -c after cwd allowlist validation. This tool is for general remote shell operations only; it is not a GitOps, Kubernetes, or file-management API. Output may be truncated. The final [exec summary] is authoritative for exit code, signal, timeout, duration, byte counts, and truncation. stderr output alone does not mean failure; non-zero exit code, signal, or timed_out=true means failure. Concurrency is bounded; too_many_active_execs means the active exec limit is currently reached and includes active/max/oldest_age_seconds/states for diagnosis.',
+    description: 'Run one non-interactive command in the configured test execution environment and return a bounded final text result with stdout/stderr tails plus an exec summary. The request is accepted only after cwd allowlist validation, runtime/output limits, environment filtering, and concurrency checks. Commands are evaluated by the environment command processor (/bin/sh -c), so use this for controlled diagnostics, validation, and test-environment maintenance tasks rather than interactive sessions or long-running services. This tool can run high-risk commands when they are intentionally requested for an approved isolated test scenario. Output may be truncated. The final [exec summary] is authoritative for exit code, signal, timeout, duration, byte counts, and truncation. stderr output alone does not mean failure; non-zero exit code, signal, or timed_out=true means failure. If capacity is full, too_many_active_execs reports active/max/oldest_age_seconds/states for diagnosis.',
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'Command string to run via /bin/sh -c on the configured remote execution host. Use explicit quoting for pipelines, redirection, &&, and environment expansion. Avoid interactive or unbounded long-running commands.' },
-        cwd: { type: 'string', description: 'Working directory on the remote execution host. It must be under the configured allowlist. If omitted, the server uses DEFAULT_CWD.' },
+        command: { type: 'string', description: 'Non-interactive command for the configured test execution environment. Use explicit quoting for pipelines, redirection, &&, and environment expansion. Avoid privileged, destructive, interactive, or unbounded long-running operations unless they are part of an approved isolated test scenario.' },
+        cwd: { type: 'string', description: 'Working directory in the test execution environment. It must be under the configured allowlist. If omitted, the server uses DEFAULT_CWD.' },
         timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime in seconds before the command is aborted. Values above MAX_TIMEOUT_SECONDS are rejected. On timeout the server sends SIGTERM, then SIGKILL after the configured kill grace period.' },
         max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. The final summary includes byte counts, truncation status, and bounded stdout/stderr tails.' },
         env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables for the command. Invalid variable names are ignored. ENV and BASH_ENV are removed before spawning.' }
@@ -172,6 +190,336 @@ function execToolSchema() {
       additionalProperties: false
     }
   };
+}
+
+function downloadFileToolSchema() {
+  return {
+    name: 'download_file',
+    description: 'Download one file from the configured test execution environment after path allowlist validation. The response is JSON text containing file metadata and data_base64 so binary files such as images, PDFs, documents, spreadsheets, and archives can be transferred through MCP. Relative paths are resolved from DEFAULT_CWD. Files larger than max_bytes or FILE_MAX_DOWNLOAD_BYTES are rejected instead of truncated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path to download. Absolute paths are validated directly; relative paths are resolved from DEFAULT_CWD. The final path must be under ALLOWED_CWDS.' },
+        max_bytes: { type: 'integer', minimum: 1, description: 'Maximum file size allowed for this download. If omitted, the server uses FILE_MAX_DOWNLOAD_BYTES or the built-in default.' }
+      },
+      required: ['path'],
+      additionalProperties: false
+    }
+  };
+}
+
+function uploadFileToolSchema() {
+  return {
+    name: 'upload_file',
+    description: 'Upload one file to the configured test execution environment after path allowlist validation and decoded-size checks. The request carries raw file bytes as data_base64 so binary files such as images, PDFs, documents, spreadsheets, and archives can be transferred through MCP. Relative paths are resolved from DEFAULT_CWD. Parent directories must already exist.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path to upload. Absolute paths are validated directly; relative paths are resolved from DEFAULT_CWD. The final path must be under ALLOWED_CWDS.' },
+        data_base64: { type: 'string', description: 'Base64-encoded raw file bytes. The decoded byte length must not exceed FILE_MAX_UPLOAD_BYTES or the built-in default.' },
+        mime_type: { type: 'string', description: 'Optional advisory MIME type for client bookkeeping. The server does not enforce file extensions from this value.' },
+        append: { type: 'boolean', description: 'Append decoded bytes to the file when true. If false or omitted, replace the file content.' }
+      },
+      required: ['path', 'data_base64'],
+      additionalProperties: false
+    }
+  };
+}
+
+async function downloadFileTool(args, config) {
+  const inputPath = requireInputPath(args?.path);
+  const maxBytes = clampFileLimit(args?.max_bytes, config.fileMaxDownloadBytes || DEFAULT_MAX_FILE_DOWNLOAD_BYTES, 'invalid_max_bytes');
+  const maxStdoutBytes = Math.ceil(maxBytes * 4 / 3) + 8192;
+  const body = await runRemoteFileScript(config, buildRemoteDownloadScript(inputPath, maxBytes, config), maxStdoutBytes);
+  return JSON.stringify({
+    path: body.path,
+    bytes: body.bytes,
+    mime_type: detectMimeType(body.path),
+    data_base64: body.data_base64
+  }, null, 2);
+}
+
+async function uploadFileTool(args, config) {
+  const inputPath = requireInputPath(args?.path);
+  const data = decodeBase64(args?.data_base64, config.fileMaxUploadBytes || DEFAULT_MAX_FILE_UPLOAD_BYTES);
+  const body = await runRemoteFileScript(
+    config,
+    buildRemoteUploadScript(inputPath, data.toString('base64'), args.append === true, config),
+    8192
+  );
+  return JSON.stringify({
+    path: body.path,
+    bytes: body.bytes,
+    action: args.append === true ? 'append' : 'write',
+    mime_type: typeof args?.mime_type === 'string' && args.mime_type.trim() ? args.mime_type.trim() : detectMimeType(body.path)
+  }, null, 2);
+}
+
+function requireInputPath(inputPath) {
+  if (typeof inputPath !== 'string' || !inputPath.trim()) {
+    throw new FileToolError('invalid_path', 'path must be a non-empty string');
+  }
+  return inputPath;
+}
+
+function clampFileLimit(value, max, errorCode) {
+  if (value === undefined || value === null) return max;
+  const n = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(n) || n <= 0) throw new FileToolError(errorCode, `${errorCode}: ${value}`);
+  if (n > max) throw new FileToolError('file_limit_too_large', `file_limit_too_large: ${n} > ${max}`);
+  return n;
+}
+
+function decodeBase64(value, maxBytes) {
+  if (typeof value !== 'string') {
+    throw new FileToolError('invalid_base64', 'data_base64 must be a string');
+  }
+  const compact = value.replace(/\s+/g, '');
+  if (compact.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) {
+    throw new FileToolError('invalid_base64', 'data_base64 is not valid base64');
+  }
+  const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
+  const decodedBytes = Math.floor((compact.length * 3) / 4) - padding;
+  if (decodedBytes > maxBytes) throw new FileToolError('file_too_large', `file_too_large: ${decodedBytes} > ${maxBytes}`);
+
+  const data = Buffer.from(compact, 'base64');
+  if (data.length !== decodedBytes) throw new FileToolError('invalid_base64', 'data_base64 is not valid base64');
+  return data;
+}
+
+async function runRemoteFileScript(config, script, maxStdoutBytes) {
+  let spawned;
+  try {
+    spawned = spawnRemoteShell(config, script);
+  } catch (err) {
+    throw new FileToolError('remote_config_error', err.message);
+  }
+
+  const { child, stdin } = spawned;
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  const stdout = [];
+  const stderr = [];
+  let outputTooLarge = false;
+  let timedOut = false;
+
+  const killRemote = (signal) => {
+    try {
+      if (child.pid) process.kill(-child.pid, signal);
+    } catch {
+      try { child.kill(signal); } catch {}
+    }
+  };
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    killRemote('SIGTERM');
+  }, config.defaultTimeoutSeconds * 1000);
+  timer.unref?.();
+
+  child.stdout.on('data', (chunk) => {
+    stdoutBytes += chunk.length;
+    if (stdoutBytes > maxStdoutBytes) {
+      outputTooLarge = true;
+      killRemote('SIGTERM');
+      return;
+    }
+    stdout.push(chunk);
+  });
+  child.stderr.on('data', (chunk) => {
+    stderrBytes += chunk.length;
+    if (stderrBytes <= 65536) stderr.push(chunk);
+  });
+
+  const close = new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code, signal) => resolve({ code, signal }));
+  });
+  child.stdin.end(stdin);
+
+  const { code, signal } = await close;
+  clearTimeout(timer);
+
+  if (timedOut) throw new FileToolError('remote_timeout', 'remote file operation timed out');
+  if (outputTooLarge) throw new FileToolError('remote_output_too_large', `remote stdout exceeded ${maxStdoutBytes} bytes`);
+  if (code !== 0) {
+    const errText = Buffer.concat(stderr).toString('utf8').trim();
+    throw new FileToolError('remote_failed', errText || `remote file operation failed: exit=${code} signal=${signal || 'null'}`);
+  }
+
+  let body;
+  try {
+    body = JSON.parse(Buffer.concat(stdout).toString('utf8'));
+  } catch {
+    throw new FileToolError('remote_protocol_error', 'remote file operation returned invalid JSON');
+  }
+  if (!body || body.ok !== true) {
+    throw new FileToolError(body?.code || 'remote_failed', body?.message || 'remote file operation failed');
+  }
+  return body;
+}
+
+function buildRemoteDownloadScript(inputPath, maxBytes, config) {
+  return `python3 - <<'PY'
+import base64, json, os, stat, sys
+
+INPUT_PATH = ${JSON.stringify(inputPath)}
+DEFAULT_CWD = ${JSON.stringify(config.defaultCwd)}
+ALLOWED_CWDS = ${JSON.stringify(config.allowedCwds)}
+MAX_BYTES = ${maxBytes}
+
+def emit(obj):
+    print(json.dumps(obj, separators=(',', ':')))
+
+def fail(code, message):
+    emit({'ok': False, 'code': code, 'message': message})
+    sys.exit(0)
+
+def target_path(path):
+    return path if os.path.isabs(path) else os.path.join(DEFAULT_CWD, path)
+
+def allowed(path):
+    for base in ALLOWED_CWDS:
+        try:
+            real_base = os.path.realpath(base)
+        except OSError:
+            continue
+        prefix = real_base if real_base == os.sep else real_base + os.sep
+        if path == real_base or path.startswith(prefix):
+            return True
+    return False
+
+target = target_path(INPUT_PATH)
+try:
+    real = os.path.realpath(target)
+    info = os.stat(real)
+except FileNotFoundError:
+    fail('not_found', 'file not found: ' + target)
+except OSError as exc:
+    fail('remote_error', str(exc))
+
+if not allowed(real):
+    fail('invalid_path', 'real path is not allowed: ' + real)
+if not stat.S_ISREG(info.st_mode):
+    fail('not_file', 'path is not a file: ' + real)
+if info.st_size > MAX_BYTES:
+    fail('file_too_large', 'file_too_large: %d > %d' % (info.st_size, MAX_BYTES))
+
+with open(real, 'rb') as fh:
+    data = fh.read(MAX_BYTES + 1)
+if len(data) > MAX_BYTES:
+    fail('file_too_large', 'file_too_large: more than %d' % MAX_BYTES)
+
+emit({'ok': True, 'path': real, 'bytes': len(data), 'data_base64': base64.b64encode(data).decode('ascii')})
+PY
+`;
+}
+
+function buildRemoteUploadScript(inputPath, dataBase64, append, config) {
+  return `python3 - <<'PY'
+import base64, binascii, errno, json, os, stat, sys
+
+INPUT_PATH = ${JSON.stringify(inputPath)}
+DEFAULT_CWD = ${JSON.stringify(config.defaultCwd)}
+ALLOWED_CWDS = ${JSON.stringify(config.allowedCwds)}
+DATA_BASE64 = ${JSON.stringify(dataBase64)}
+APPEND = ${append ? 'True' : 'False'}
+
+def emit(obj):
+    print(json.dumps(obj, separators=(',', ':')))
+
+def fail(code, message):
+    emit({'ok': False, 'code': code, 'message': message})
+    sys.exit(0)
+
+def target_path(path):
+    return path if os.path.isabs(path) else os.path.join(DEFAULT_CWD, path)
+
+def allowed(path):
+    for base in ALLOWED_CWDS:
+        try:
+            real_base = os.path.realpath(base)
+        except OSError:
+            continue
+        prefix = real_base if real_base == os.sep else real_base + os.sep
+        if path == real_base or path.startswith(prefix):
+            return True
+    return False
+
+try:
+    data = base64.b64decode(DATA_BASE64.encode('ascii'), validate=True)
+except (binascii.Error, ValueError) as exc:
+    fail('invalid_base64', str(exc))
+
+target = target_path(INPUT_PATH)
+parent = os.path.dirname(target) or '.'
+name = os.path.basename(target.rstrip(os.sep))
+if not name:
+    fail('invalid_path', 'path must name a file: ' + target)
+
+try:
+    real_parent = os.path.realpath(parent)
+    parent_info = os.stat(real_parent)
+except FileNotFoundError:
+    fail('parent_not_found', 'parent directory does not exist for: ' + target)
+except OSError as exc:
+    fail('remote_error', str(exc))
+
+if not stat.S_ISDIR(parent_info.st_mode):
+    fail('parent_not_found', 'parent path is not a directory: ' + parent)
+if not allowed(real_parent):
+    fail('invalid_path', 'real parent path is not allowed: ' + real_parent)
+
+real_target = os.path.join(real_parent, name)
+if os.path.islink(real_target):
+    fail('symlink_not_allowed', 'symlink path is not allowed: ' + real_target)
+
+flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if APPEND else os.O_TRUNC)
+if hasattr(os, 'O_NOFOLLOW'):
+    flags |= os.O_NOFOLLOW
+try:
+    fd = os.open(real_target, flags, 0o666)
+except IsADirectoryError:
+    fail('not_file', 'path is not a file: ' + real_target)
+except OSError as exc:
+    if exc.errno == errno.ELOOP:
+        fail('symlink_not_allowed', 'symlink path is not allowed: ' + real_target)
+    fail('remote_error', str(exc))
+
+with os.fdopen(fd, 'ab' if APPEND else 'wb') as fh:
+    fh.write(data)
+
+emit({'ok': True, 'path': real_target, 'bytes': len(data)})
+PY
+`;
+}
+
+function detectMimeType(filePath) {
+  switch (extname(filePath).toLowerCase()) {
+    case '.txt': return 'text/plain';
+    case '.md': return 'text/markdown';
+    case '.json': return 'application/json';
+    case '.csv': return 'text/csv';
+    case '.html': return 'text/html';
+    case '.xml': return 'application/xml';
+    case '.png': return 'image/png';
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg';
+    case '.gif': return 'image/gif';
+    case '.webp': return 'image/webp';
+    case '.svg': return 'image/svg+xml';
+    case '.pdf': return 'application/pdf';
+    case '.doc': return 'application/msword';
+    case '.docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case '.xls': return 'application/vnd.ms-excel';
+    case '.xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case '.ppt': return 'application/vnd.ms-powerpoint';
+    case '.pptx': return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    case '.zip': return 'application/zip';
+    case '.gz': return 'application/gzip';
+    case '.tar': return 'application/x-tar';
+    default: return 'application/octet-stream';
+  }
 }
 
 function renderToolText(summary) {

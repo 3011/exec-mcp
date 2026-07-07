@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
     PORT=8080 \
     METRICS_PORT=9090 \
     NODE_OPTIONS=--max-old-space-size=256 \
-    EXEC_MODE=local \
+    REMOTE_BIN=ssh \
     REMOTE_PORT=22 \
     REMOTE_KEY_PATH=/run/ssh-mcp/id_ed25519 \
     REMOTE_USER=root \
