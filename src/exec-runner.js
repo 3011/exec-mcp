@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { RingBuffer } from './ring-buffer.js';
 import { redact } from './redact.js';
 import { ExecRegistry, TooManyActiveExecsError } from './exec-registry.js';
@@ -38,7 +38,11 @@ export class ExecRunner {
     const command = typeof req.command === 'string' ? req.command.trim() : '';
     if (!command) throw new ExecRejectedError('invalid_command', 'command must be a non-empty string');
 
-    const cwd = resolve(String(req.cwd || this.config.defaultCwd));
+    const cwdInput = String(req.cwd || this.config.defaultCwd);
+    if (!isAbsolute(cwdInput)) {
+      throw new ExecRejectedError('invalid_cwd', `cwd must be an absolute path: ${cwdInput}`);
+    }
+    const cwd = resolve(cwdInput);
     if (!isAllowedCwd(cwd, this.config.allowedCwds)) {
       throw new ExecRejectedError('invalid_cwd', `cwd is not allowed: ${cwd}`);
     }
@@ -67,7 +71,7 @@ export class ExecRunner {
     delete env.ENV;
     delete env.BASH_ENV;
 
-    return { command, cwd, timeoutSeconds, maxOutputBytes, env };
+    return { command, cwd, timeoutSeconds, maxOutputBytes, env, allowedCwds: this.config.allowedCwds, killGraceSeconds: this.config.killGraceSeconds };
   }
 
   async run(input, emit, options = {}) {
@@ -124,14 +128,14 @@ export class ExecRunner {
       }
     };
 
-    const scheduleSigkill = () => {
+    const scheduleSigkill = (delaySeconds = this.config.killGraceSeconds, action = 'sigkill') => {
       if (sigkillTimer) return;
       sigkillTimer = setTimeout(() => {
         if (!childExited) {
-          if (timedOut) send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'sigkill' });
+          if (timedOut) send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action });
           killGroup('SIGKILL');
         }
-      }, this.config.killGraceSeconds * 1000);
+      }, delaySeconds * 1000);
       sigkillTimer.unref?.();
     };
 
@@ -143,7 +147,9 @@ export class ExecRunner {
           timeoutCounted = true;
           this.metrics.timeoutTotal++;
         }
-        send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'sigterm', reason: reasonCode });
+        send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'remote_watchdog', reason: reasonCode });
+        scheduleSigkill(this.config.killGraceSeconds + 2, 'local_sigkill_fallback');
+        return;
       } else if (!disconnectCounted) {
         disconnectCounted = true;
         this.metrics.streamDisconnectTotal++;
@@ -306,14 +312,80 @@ function buildRemoteScript(req) {
   lines.push('set -eu');
   lines.push(`CWD_B64='${b64(req.cwd)}'`);
   lines.push(`CMD_B64='${b64(req.command)}'`);
+  lines.push(`TIMEOUT_SECONDS='${Number.parseInt(String(req.timeoutSeconds), 10)}'`);
+  lines.push(`KILL_GRACE_SECONDS='${Math.max(1, Number.parseInt(String(req.killGraceSeconds), 10) || 1)}'`);
   lines.push('CWD=$(printf %s "$CWD_B64" | base64 -d)');
   lines.push('CMD=$(printf %s "$CMD_B64" | base64 -d)');
+  lines.push('if ! command -v setsid >/dev/null 2>&1; then echo "remote_environment_error: setsid is required" >&2; exit 127; fi');
+  lines.push('REAL_CWD=$(cd "$CWD" 2>/dev/null && pwd -P) || { echo "invalid_cwd: cwd does not exist or is not accessible: $CWD" >&2; exit 126; }');
+  lines.push('is_under_path() {');
+  lines.push('  candidate="$1"');
+  lines.push('  base="$2"');
+  lines.push('  if [ "$base" = "/" ]; then return 0; fi');
+  lines.push('  case "$candidate" in "$base"|"$base"/*) return 0 ;; *) return 1 ;; esac');
+  lines.push('}');
+  lines.push('CWD_ALLOWED=0');
+  for (const base of req.allowedCwds || []) {
+    lines.push(`BASE_B64='${b64(base)}'`);
+    lines.push('BASE=$(printf %s "$BASE_B64" | base64 -d)');
+    lines.push('if REAL_BASE=$(cd "$BASE" 2>/dev/null && pwd -P); then');
+    lines.push('  if is_under_path "$REAL_CWD" "$REAL_BASE"; then CWD_ALLOWED=1; fi');
+    lines.push('fi');
+  }
+  lines.push('if [ "$CWD_ALLOWED" != 1 ]; then echo "invalid_cwd: real cwd is not allowed: $REAL_CWD" >&2; exit 126; fi');
   for (const [key, value] of Object.entries(req.env || {})) {
     lines.push(`${key}_B64='${b64(value)}'`);
     lines.push(`export ${key}=$(printf %s "$${key}_B64" | base64 -d)`);
   }
-  lines.push('cd "$CWD"');
-  lines.push('exec /bin/sh -c "$CMD"');
+  lines.push('cd "$REAL_CWD"');
+  lines.push('CHILD_PID=');
+  lines.push('WATCHDOG_PID=');
+  lines.push('kill_child_group() {');
+  lines.push('  sig="$1"');
+  lines.push('  if [ -n "${CHILD_PID:-}" ]; then');
+  lines.push('    kill "-$sig" "-$CHILD_PID" 2>/dev/null || kill "-$sig" "$CHILD_PID" 2>/dev/null || true');
+  lines.push('  fi');
+  lines.push('}');
+  lines.push('stop_watchdog() {');
+  lines.push('  if [ -n "${WATCHDOG_PID:-}" ]; then');
+  lines.push('    kill "$WATCHDOG_PID" 2>/dev/null || true');
+  lines.push('    wait "$WATCHDOG_PID" 2>/dev/null || true');
+  lines.push('  fi');
+  lines.push('}');
+  lines.push('terminate_child_group() {');
+  lines.push('  trap - TERM HUP INT EXIT');
+  lines.push('  kill_child_group TERM');
+  lines.push('  sleep "$KILL_GRACE_SECONDS"');
+  lines.push('  kill_child_group KILL');
+  lines.push('  stop_watchdog');
+  lines.push('  exit 143');
+  lines.push('}');
+  lines.push('trap terminate_child_group TERM HUP INT');
+  lines.push('setsid /bin/sh -c "$CMD" &');
+  lines.push('CHILD_PID=$!');
+  lines.push('(');
+  lines.push('  SLEEP_PID=');
+  lines.push('  trap \'if [ -n "${SLEEP_PID:-}" ]; then kill "$SLEEP_PID" 2>/dev/null || true; fi; exit 0\' TERM');
+  lines.push('  sleep "$TIMEOUT_SECONDS" &');
+  lines.push('  SLEEP_PID=$!');
+  lines.push('  wait "$SLEEP_PID" || exit 0');
+  lines.push('  kill_child_group TERM');
+  lines.push('  sleep "$KILL_GRACE_SECONDS"');
+  lines.push('  kill_child_group KILL');
+  lines.push(') &');
+  lines.push('WATCHDOG_PID=$!');
+  lines.push('set +e');
+  lines.push('wait "$CHILD_PID"');
+  lines.push('STATUS=$?');
+  lines.push('set -e');
+  lines.push('stop_watchdog');
+  lines.push('trap - TERM HUP INT');
+  lines.push('if kill -0 "-$CHILD_PID" 2>/dev/null; then');
+  lines.push('  kill_child_group TERM');
+  lines.push('  sleep 1');
+  lines.push('  kill_child_group KILL');
+  lines.push('fi');
+  lines.push('exit "$STATUS"');
   return lines.join('\n') + '\n';
 }
 

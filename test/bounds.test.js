@@ -37,6 +37,16 @@ test('output limit above hard maximum is rejected before spawn', () => {
   );
 });
 
+test('relative cwd is rejected before spawn', () => {
+  const runner = makeRunner();
+  assert.throws(
+    () => runner.validate({ command: 'echo ok', cwd: 'relative/path' }),
+    (err) => err instanceof ExecRejectedError
+      && err.code === 'invalid_cwd'
+      && /absolute path/.test(err.message)
+  );
+});
+
 test('invalid env names are ignored and valid env names are passed', async () => {
   const runner = makeRunner();
   const events = [];

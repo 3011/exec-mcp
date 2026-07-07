@@ -187,7 +187,7 @@ function execToolSchema() {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Non-interactive command for the configured test execution environment. Use explicit quoting for pipelines, redirection, &&, and environment expansion. Avoid privileged, destructive, interactive, or unbounded long-running operations unless they are part of an approved isolated test scenario.' },
-        cwd: { type: 'string', description: 'Working directory in the test execution environment. It must be under the configured allowlist. If omitted, the server uses DEFAULT_CWD.' },
+        cwd: { type: 'string', description: 'Absolute working directory in the test execution environment. It must be under the configured allowlist after remote realpath/symlink resolution. If omitted, the server uses DEFAULT_CWD.' },
         timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime in seconds before the command is aborted. Values above MAX_TIMEOUT_SECONDS are rejected. On timeout the server sends SIGTERM, then SIGKILL after the configured kill grace period.' },
         max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. The final summary includes byte counts, truncation status, and stdout_tail plus stderr_tail bounded by this value and the server tail limit.' },
         env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables for the command. Invalid variable names are ignored. ENV and BASH_ENV are removed before spawning.' }

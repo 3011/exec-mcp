@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parseConfig } from '../src/config.js';
 import { ExecRunner } from '../src/exec-runner.js';
 import { remoteTestEnv } from '../scripts/helpers.js';
@@ -33,6 +37,77 @@ test('timeout kills the whole process group including background child', async (
   await new Promise((resolve) => setTimeout(resolve, 3500));
   const check = await runner.run({ command: `[ ! -e ${marker} ]`, cwd: '/tmp' }, () => {});
   assert.equal(check.code, 0, 'background process should not survive timeout');
+});
+
+test('timeout kills a foreground child process that ignores SIGTERM', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exec-mcp-timeout-foreground-'));
+  const pidFile = join(root, 'child.pid');
+  const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root, DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '2' });
+  try {
+    const summary = await runner.run({
+      command: `python3 -c "import os, signal, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)" ${pidFile}`,
+      cwd: root,
+      timeout_seconds: 1
+    }, () => {});
+    assert.equal(summary.timed_out, true);
+    const pid = Number.parseInt(await readFile(pidFile, 'utf8'), 10);
+    assert.equal(await waitForPidExit(pid), true, `foreground child should be gone after timeout: ${pid}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('timeout kills a background child process', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exec-mcp-timeout-background-'));
+  const pidFile = join(root, 'child.pid');
+  const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root, DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '2' });
+  try {
+    const summary = await runner.run({
+      command: `sleep 60 & echo $! > ${pidFile}; wait`,
+      cwd: root,
+      timeout_seconds: 1
+    }, () => {});
+    assert.equal(summary.timed_out, true);
+    const pid = Number.parseInt(await readFile(pidFile, 'utf8'), 10);
+    assert.equal(await waitForPidExit(pid), true, `background child should be gone after timeout: ${pid}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('normal command exit cleans up leftover background process group members', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exec-mcp-normal-background-'));
+  const pidFile = join(root, 'child.pid');
+  const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root });
+  try {
+    const summary = await runner.run({
+      command: `sleep 60 & echo $! > ${pidFile}; printf done`,
+      cwd: root
+    }, () => {});
+    assert.equal(summary.code, 0);
+    const pid = Number.parseInt(await readFile(pidFile, 'utf8'), 10);
+    assert.equal(await waitForPidExit(pid), true, `leftover background child should be gone after normal exit: ${pid}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cwd symlink realpath must remain inside allowlist', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exec-mcp-cwd-realpath-'));
+  const link = join(root, 'var-link');
+  await symlink('/var', link);
+  const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root });
+  try {
+    const events = [];
+    const summary = await runner.run({
+      command: 'pwd -P',
+      cwd: link
+    }, (event) => events.push(event));
+    assert.notEqual(summary.code, 0);
+    assert.match(events.map((event) => event.data || event.stderr_tail || '').join('\n'), /invalid_cwd/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('large output is drained, counted, truncated, and tail is bounded', async () => {
@@ -102,3 +177,12 @@ test('heartbeat events include byte counters while command is running', async ()
   assert.equal(typeof heartbeats[0].stdout_bytes, 'number');
   assert.equal(typeof heartbeats[0].elapsed_ms, 'number');
 });
+
+async function waitForPidExit(pid, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!existsSync(`/proc/${pid}`)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !existsSync(`/proc/${pid}`);
+}
