@@ -36,6 +36,22 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.ok(body.result.tools.find((item) => item.name === 'upload_file'));
     assert.equal(body.result.tools.find((item) => item.name === 'read_file'), undefined);
     assert.equal(body.result.tools.find((item) => item.name === 'write_file'), undefined);
+    assert.equal(tool.outputSchema.type, 'object');
+    assert.deepEqual(tool.outputSchema.required, [
+      'exec_id',
+      'type',
+      'code',
+      'signal',
+      'duration_ms',
+      'stdout_bytes',
+      'stderr_bytes',
+      'truncated',
+      'timed_out',
+      'stdout_tail',
+      'stderr_tail'
+    ]);
+    assert.equal(body.result.tools.find((item) => item.name === 'download_file').outputSchema.properties.data_base64.type, 'string');
+    assert.equal(body.result.tools.find((item) => item.name === 'upload_file').outputSchema.properties.action.enum.includes('append'), true);
     assert.match(tool.description, /test execution environment/);
     assert.match(tool.description, /\/bin\/sh -c/);
     assert.match(tool.description, /cwd allowlist validation/);
@@ -79,6 +95,7 @@ test('MCP download_file and upload_file transfer binary files inside allowlist',
     });
     assert.equal(upload.result.isError, false);
     const uploadBody = JSON.parse(upload.result.content[0].text);
+    assert.deepEqual(upload.result.structuredContent, uploadBody);
     assert.equal(uploadBody.action, 'write');
     assert.equal(uploadBody.bytes, bytes.length);
     assert.equal(uploadBody.mime_type, 'image/png');
@@ -86,6 +103,7 @@ test('MCP download_file and upload_file transfer binary files inside allowlist',
     const download = await mcpCall(base, 2, 'download_file', { path: 'sample.png' });
     assert.equal(download.result.isError, false);
     const downloadBody = JSON.parse(download.result.content[0].text);
+    assert.deepEqual(download.result.structuredContent, downloadBody);
     assert.equal(downloadBody.bytes, bytes.length);
     assert.equal(downloadBody.mime_type, 'image/png');
     assert.equal(downloadBody.data_base64, bytes.toString('base64'));
@@ -107,6 +125,7 @@ test('MCP download_file and upload_file transfer binary files inside allowlist',
     await mcpCall(base, 7, 'upload_file', { path: 'append.bin', data_base64: Buffer.from([1, 2]).toString('base64') });
     const append = await mcpCall(base, 8, 'upload_file', { path: 'append.bin', data_base64: Buffer.from([3]).toString('base64'), append: true });
     assert.equal(append.result.isError, false);
+    assert.equal(append.result.structuredContent.action, 'append');
     const appended = await mcpCall(base, 9, 'download_file', { path: 'append.bin' });
     assert.equal(JSON.parse(appended.result.content[0].text).data_base64, Buffer.from([1, 2, 3]).toString('base64'));
 
@@ -136,6 +155,39 @@ test('MCP download_file and upload_file transfer binary files inside allowlist',
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('MCP exec call returns structured content matching output schema', async () => {
+  const config = parseConfig({
+    HOST: '127.0.0.1',
+    PORT: '0',
+    ALLOWED_CWDS: '/tmp',
+    DEFAULT_CWD: '/tmp',
+    ...remoteTestEnv()
+  });
+  const { server } = createServer(config);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    const result = await mcpCall(base, 1, 'exec', {
+      command: 'printf hello',
+      cwd: '/tmp',
+      timeout_seconds: 5,
+      max_output_bytes: 1024
+    });
+    assert.equal(result.result.isError, false);
+    assert.match(result.result.content[0].text, /hello/);
+    assert.equal(result.result.structuredContent.type, 'exit');
+    assert.equal(result.result.structuredContent.code, 0);
+    assert.equal(result.result.structuredContent.signal, null);
+    assert.equal(result.result.structuredContent.timed_out, false);
+    assert.equal(result.result.structuredContent.truncated, false);
+    assert.match(result.result.structuredContent.stdout_tail, /hello/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 

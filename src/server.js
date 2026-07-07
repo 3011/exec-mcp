@@ -144,13 +144,15 @@ async function handleMcpMessage(msg, runner) {
         const events = [];
         const summary = await runner.run(args, (event) => events.push(event));
         const text = renderToolText(summary);
-        return toolResult(id, text, summary.code !== 0 || summary.timed_out === true);
+        return toolResult(id, text, summary.code !== 0 || summary.timed_out === true, execStructuredContent(summary));
       }
       if (name === 'download_file') {
-        return toolResult(id, await downloadFileTool(args, runner.config), false);
+        const result = await downloadFileTool(args, runner.config);
+        return toolResult(id, JSON.stringify(result, null, 2), false, result);
       }
       if (name === 'upload_file') {
-        return toolResult(id, await uploadFileTool(args, runner.config), false);
+        const result = await uploadFileTool(args, runner.config);
+        return toolResult(id, JSON.stringify(result, null, 2), false, result);
       }
       return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {
@@ -162,8 +164,8 @@ async function handleMcpMessage(msg, runner) {
   return jsonError(id, -32601, `Method not found: ${method}`);
 }
 
-function toolResult(id, text, isError) {
-  return {
+function toolResult(id, text, isError, structuredContent) {
+  const result = {
     jsonrpc: '2.0',
     id,
     result: {
@@ -171,6 +173,10 @@ function toolResult(id, text, isError) {
       isError
     }
   };
+  if (structuredContent !== undefined) {
+    result.result.structuredContent = structuredContent;
+  }
+  return result;
 }
 
 function execToolSchema() {
@@ -188,6 +194,24 @@ function execToolSchema() {
       },
       required: ['command'],
       additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        exec_id: { type: 'string', description: 'Unique identifier for this exec call.' },
+        type: { type: 'string', enum: ['exit'], description: 'Final event type for the command.' },
+        code: { type: ['integer', 'null'], description: 'Process exit code. Null when the process ended by signal before reporting a code.' },
+        signal: { type: ['string', 'null'], description: 'Signal associated with process termination, or null.' },
+        duration_ms: { type: 'integer', minimum: 0, description: 'Command runtime in milliseconds.' },
+        stdout_bytes: { type: 'integer', minimum: 0, description: 'Total stdout bytes observed before redaction.' },
+        stderr_bytes: { type: 'integer', minimum: 0, description: 'Total stderr bytes observed before redaction.' },
+        truncated: { type: 'boolean', description: 'True when forwarded output exceeded max_output_bytes.' },
+        timed_out: { type: 'boolean', description: 'True when the command exceeded timeout_seconds.' },
+        stdout_tail: { type: 'string', description: 'Redacted tail of stdout retained for final inspection.' },
+        stderr_tail: { type: 'string', description: 'Redacted tail of stderr retained for final inspection.' }
+      },
+      required: ['exec_id', 'type', 'code', 'signal', 'duration_ms', 'stdout_bytes', 'stderr_bytes', 'truncated', 'timed_out', 'stdout_tail', 'stderr_tail'],
+      additionalProperties: false
     }
   };
 }
@@ -203,6 +227,17 @@ function downloadFileToolSchema() {
         max_bytes: { type: 'integer', minimum: 1, description: 'Maximum file size allowed for this download. If omitted, the server uses FILE_MAX_DOWNLOAD_BYTES or the built-in default.' }
       },
       required: ['path'],
+      additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Resolved real path of the downloaded file in the test execution environment.' },
+        bytes: { type: 'integer', minimum: 0, description: 'Number of decoded file bytes.' },
+        mime_type: { type: 'string', description: 'Best-effort MIME type derived from the file extension.' },
+        data_base64: { type: 'string', description: 'Base64-encoded raw file bytes.' }
+      },
+      required: ['path', 'bytes', 'mime_type', 'data_base64'],
       additionalProperties: false
     }
   };
@@ -222,6 +257,17 @@ function uploadFileToolSchema() {
       },
       required: ['path', 'data_base64'],
       additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Resolved real path of the uploaded file in the test execution environment.' },
+        bytes: { type: 'integer', minimum: 0, description: 'Number of decoded bytes written.' },
+        action: { type: 'string', enum: ['write', 'append'], description: 'Whether the operation replaced or appended file content.' },
+        mime_type: { type: 'string', description: 'Advisory MIME type supplied by the caller or inferred from the file extension.' }
+      },
+      required: ['path', 'bytes', 'action', 'mime_type'],
+      additionalProperties: false
     }
   };
 }
@@ -231,12 +277,12 @@ async function downloadFileTool(args, config) {
   const maxBytes = clampFileLimit(args?.max_bytes, config.fileMaxDownloadBytes || DEFAULT_MAX_FILE_DOWNLOAD_BYTES, 'invalid_max_bytes');
   const maxStdoutBytes = Math.ceil(maxBytes * 4 / 3) + 8192;
   const body = await runRemoteFileScript(config, buildRemoteDownloadScript(inputPath, maxBytes, config), maxStdoutBytes);
-  return JSON.stringify({
+  return {
     path: body.path,
     bytes: body.bytes,
     mime_type: detectMimeType(body.path),
     data_base64: body.data_base64
-  }, null, 2);
+  };
 }
 
 async function uploadFileTool(args, config) {
@@ -247,12 +293,28 @@ async function uploadFileTool(args, config) {
     buildRemoteUploadScript(inputPath, data.toString('base64'), args.append === true, config),
     8192
   );
-  return JSON.stringify({
+  return {
     path: body.path,
     bytes: body.bytes,
     action: args.append === true ? 'append' : 'write',
     mime_type: typeof args?.mime_type === 'string' && args.mime_type.trim() ? args.mime_type.trim() : detectMimeType(body.path)
-  }, null, 2);
+  };
+}
+
+function execStructuredContent(summary) {
+  return {
+    exec_id: summary.exec_id,
+    type: summary.type,
+    code: summary.code,
+    signal: summary.signal || null,
+    duration_ms: summary.duration_ms,
+    stdout_bytes: summary.stdout_bytes,
+    stderr_bytes: summary.stderr_bytes,
+    truncated: summary.truncated,
+    timed_out: summary.timed_out,
+    stdout_tail: summary.stdout_tail,
+    stderr_tail: summary.stderr_tail
+  };
 }
 
 function requireInputPath(inputPath) {
