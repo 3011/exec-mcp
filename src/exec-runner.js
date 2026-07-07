@@ -64,6 +64,8 @@ export class ExecRunner {
         if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) env[key] = String(value);
       }
     }
+    delete env.ENV;
+    delete env.BASH_ENV;
 
     return { command, cwd, timeoutSeconds, maxOutputBytes, env };
   }
@@ -104,8 +106,9 @@ export class ExecRunner {
     let heartbeat = null;
     let sigkillTimer = null;
     const startedAt = new Date(rec.startedAt);
-    const stdoutTail = new RingBuffer(this.config.ringBufferBytes);
-    const stderrTail = new RingBuffer(this.config.ringBufferBytes);
+    const tailBufferBytes = Math.min(this.config.ringBufferBytes, req.maxOutputBytes);
+    const stdoutTail = new RingBuffer(tailBufferBytes);
+    const stderrTail = new RingBuffer(tailBufferBytes);
 
     const send = (event) => emit({ exec_id: execId, ...event });
 
@@ -215,6 +218,7 @@ export class ExecRunner {
           this.metrics.durationMsTotal += durationMs;
           this.bumpMap(this.metrics.exitCodeTotal, String(code ?? signal ?? 'null'));
 
+          const tails = boundedRedactedTails(stdoutTail.toString(), stderrTail.toString(), req.maxOutputBytes);
           const summary = {
             type: 'exit',
             code,
@@ -224,8 +228,8 @@ export class ExecRunner {
             stderr_bytes: stderrBytes,
             truncated,
             timed_out: timedOut,
-            stdout_tail: redact(stdoutTail.toString()),
-            stderr_tail: redact(stderrTail.toString())
+            stdout_tail: tails.stdout_tail,
+            stderr_tail: tails.stderr_tail
           };
           send(summary);
           resolveRun({ exec_id: execId, ...summary });
@@ -322,6 +326,55 @@ function sanitizedEnv(extraEnv) {
   delete env.ENV;
   delete env.BASH_ENV;
   return env;
+}
+
+function boundedRedactedTails(stdoutRaw, stderrRaw, maxBytes) {
+  return boundTailPair(redact(stdoutRaw), redact(stderrRaw), maxBytes);
+}
+
+function boundTailPair(stdout, stderr, maxBytes) {
+  const limit = Math.max(0, Number.parseInt(String(maxBytes), 10) || 0);
+  if (limit === 0) return { stdout_tail: '', stderr_tail: '' };
+
+  const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
+  const stderrBytes = Buffer.byteLength(stderr, 'utf8');
+  if (stdoutBytes + stderrBytes <= limit) {
+    return { stdout_tail: stdout, stderr_tail: stderr };
+  }
+  if (stdoutBytes === 0) {
+    return { stdout_tail: '', stderr_tail: trimUtf8Tail(stderr, limit) };
+  }
+  if (stderrBytes === 0) {
+    return { stdout_tail: trimUtf8Tail(stdout, limit), stderr_tail: '' };
+  }
+
+  let stdoutBudget = Math.min(stdoutBytes, Math.ceil(limit / 2));
+  let stderrBudget = Math.min(stderrBytes, limit - stdoutBudget);
+  let remaining = limit - stdoutBudget - stderrBudget;
+  if (remaining > 0 && stdoutBudget < stdoutBytes) {
+    const add = Math.min(stdoutBytes - stdoutBudget, remaining);
+    stdoutBudget += add;
+    remaining -= add;
+  }
+  if (remaining > 0 && stderrBudget < stderrBytes) {
+    stderrBudget += Math.min(stderrBytes - stderrBudget, remaining);
+  }
+
+  return {
+    stdout_tail: trimUtf8Tail(stdout, stdoutBudget),
+    stderr_tail: trimUtf8Tail(stderr, stderrBudget)
+  };
+}
+
+function trimUtf8Tail(value, maxBytes) {
+  if (maxBytes <= 0) return '';
+  const buf = Buffer.from(value, 'utf8');
+  if (buf.length <= maxBytes) return value;
+  let text = buf.subarray(buf.length - maxBytes).toString('utf8');
+  while (Buffer.byteLength(text, 'utf8') > maxBytes) {
+    text = text.slice(1);
+  }
+  return text;
 }
 
 function clampInt(value, fallback, min, max, errorCode) {

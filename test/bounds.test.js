@@ -102,8 +102,16 @@ test('concurrency limit rejects extra active execs', async () => {
 test('ENV and BASH_ENV are removed before spawning shell', async () => {
   const runner = makeRunner();
   const events = [];
-  const summary = await runner.run({ command: 'printf "%s:%s" "$ENV" "$BASH_ENV"', cwd: '/tmp' }, (event) => events.push(event));
+  const summary = await runner.run({
+    command: 'printf "%s:%s:%s" "$ENV" "$BASH_ENV" "$EXEC_MCP_CUSTOM"',
+    cwd: '/tmp',
+    env: {
+      ENV: '/tmp/should_be_removed',
+      BASH_ENV: '/tmp/should_be_removed',
+      EXEC_MCP_CUSTOM: 'env_from_tool'
+    }
+  }, (event) => events.push(event));
   assert.equal(summary.code, 0);
   const stdout = events.filter((e) => e.type === 'stdout').map((e) => e.data).join('');
-  assert.equal(stdout, ':');
+  assert.equal(stdout, '::env_from_tool');
 });

@@ -52,6 +52,33 @@ test('large output is drained, counted, truncated, and tail is bounded', async (
   assert.equal(events.filter((e) => e.type === 'truncated').length, 1);
 });
 
+test('tail summary is capped by max_output_bytes even when ring buffer is larger', async () => {
+  const runner = makeRunner({ DEFAULT_MAX_OUTPUT_BYTES: '1024', HARD_MAX_OUTPUT_BYTES: '2048', RING_BUFFER_BYTES: '65536' });
+  const summary = await runner.run({
+    command: `python3 -c "import sys; sys.stdout.write('x' * 37000)"`,
+    cwd: '/tmp',
+    max_output_bytes: 1024
+  }, () => {});
+  assert.equal(summary.code, 0);
+  assert.equal(summary.truncated, true);
+  assert.equal(summary.stdout_bytes, 37000);
+  assert.equal(Buffer.byteLength(summary.stdout_tail + summary.stderr_tail, 'utf8') <= 1024, true);
+});
+
+test('combined stdout and stderr tails are capped by max_output_bytes', async () => {
+  const runner = makeRunner({ DEFAULT_MAX_OUTPUT_BYTES: '1024', HARD_MAX_OUTPUT_BYTES: '2048', RING_BUFFER_BYTES: '65536' });
+  const summary = await runner.run({
+    command: `python3 -c "import sys; sys.stdout.write('o' * 2000); sys.stderr.write('e' * 2000)"`,
+    cwd: '/tmp',
+    max_output_bytes: 1024
+  }, () => {});
+  assert.equal(summary.code, 0);
+  assert.equal(summary.truncated, true);
+  assert.equal(Buffer.byteLength(summary.stdout_tail + summary.stderr_tail, 'utf8') <= 1024, true);
+  assert.equal(summary.stdout_tail.length > 0, true);
+  assert.equal(summary.stderr_tail.length > 0, true);
+});
+
 test('stdout and stderr events carry monotonically increasing sequence numbers', async () => {
   const runner = makeRunner();
   const events = [];

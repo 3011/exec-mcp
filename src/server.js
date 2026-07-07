@@ -189,7 +189,7 @@ function execToolSchema() {
         command: { type: 'string', description: 'Non-interactive command for the configured test execution environment. Use explicit quoting for pipelines, redirection, &&, and environment expansion. Avoid privileged, destructive, interactive, or unbounded long-running operations unless they are part of an approved isolated test scenario.' },
         cwd: { type: 'string', description: 'Working directory in the test execution environment. It must be under the configured allowlist. If omitted, the server uses DEFAULT_CWD.' },
         timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime in seconds before the command is aborted. Values above MAX_TIMEOUT_SECONDS are rejected. On timeout the server sends SIGTERM, then SIGKILL after the configured kill grace period.' },
-        max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. The final summary includes byte counts, truncation status, and bounded stdout/stderr tails.' },
+        max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. The final summary includes byte counts, truncation status, and stdout_tail plus stderr_tail bounded by this value and the server tail limit.' },
         env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables for the command. Invalid variable names are ignored. ENV and BASH_ENV are removed before spawning.' }
       },
       required: ['command'],
@@ -207,8 +207,8 @@ function execToolSchema() {
         stderr_bytes: { type: 'integer', minimum: 0, description: 'Total stderr bytes observed before redaction.' },
         truncated: { type: 'boolean', description: 'True when forwarded output exceeded max_output_bytes.' },
         timed_out: { type: 'boolean', description: 'True when the command exceeded timeout_seconds.' },
-        stdout_tail: { type: 'string', description: 'Redacted tail of stdout retained for final inspection.' },
-        stderr_tail: { type: 'string', description: 'Redacted tail of stderr retained for final inspection.' }
+        stdout_tail: { type: 'string', description: 'Redacted tail of stdout retained for final inspection. stdout_tail plus stderr_tail is bounded by max_output_bytes and the server tail limit.' },
+        stderr_tail: { type: 'string', description: 'Redacted tail of stderr retained for final inspection. stdout_tail plus stderr_tail is bounded by max_output_bytes and the server tail limit.' }
       },
       required: ['exec_id', 'type', 'code', 'signal', 'duration_ms', 'stdout_bytes', 'stderr_bytes', 'truncated', 'timed_out', 'stdout_tail', 'stderr_tail'],
       additionalProperties: false
