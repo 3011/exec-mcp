@@ -2,6 +2,8 @@ const RULES = [
   /(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+\/=:-]+/gi,
   /((?:AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)\s*=\s*)[^\s]+/gi,
   /((?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*)[^\s'\"]+/gi,
+  /((?:--password|--passwd|--token|--secret|-p)\s+)(?:'[^']*'|"[^"]*"|[^\s]+)/gi,
+  /(https?:\/\/[^:\s/@]+:)[^@\s/]+@/gi,
   /(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g
 ];
 

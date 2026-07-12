@@ -1,21 +1,33 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { RingBuffer } from './ring-buffer.js';
 import { redact } from './redact.js';
-import { ExecRegistry, TooManyActiveExecsError } from './exec-registry.js';
+import { ExecRegistry, ExecutionCircuitOpenError, TooManyActiveExecsError } from './exec-registry.js';
 
 export class ExecRejectedError extends Error {
-  constructor(code, message) {
+  constructor(code, message, details = undefined) {
     super(message);
     this.name = 'ExecRejectedError';
     this.code = code;
+    this.details = details;
   }
 }
 
 export class ExecRunner {
   constructor(config) {
     this.config = config;
-    this.registry = new ExecRegistry({ maxActive: config.maxConcurrentExecs });
+    this.registry = new ExecRegistry({
+      maxActive: config.maxConcurrentExecs,
+      historyLimit: config.recentHistoryLimit,
+      reapGraceMs: config.registryReapGraceSeconds * 1000,
+      emergencyReapMs: config.emergencyReapSeconds * 1000
+    });
+    this.registry.onEmergencyReap = (record) => this.logLifecycle('unconfirmed_reaped', record?.exec_id, {
+      abort_source: record?.abort_source,
+      transport_exit_confirmed: false,
+      remote_exit_confirmed: null
+    });
     this.metrics = {
       requestsTotal: 0,
       rejectedTotal: new Map(),
@@ -25,7 +37,11 @@ export class ExecRunner {
       streamDisconnectTotal: 0,
       exitCodeTotal: new Map(),
       outputBytesTotal: { stdout: 0, stderr: 0 },
-      durationMsTotal: 0
+      durationMsTotal: 0,
+      startedTotal: 0,
+      abortRequestedTotal: new Map(),
+      cancelRequestsTotal: new Map(),
+      finishedTotal: new Map()
     };
   }
 
@@ -52,6 +68,7 @@ export class ExecRunner {
       this.config.defaultTimeoutSeconds,
       1,
       this.config.maxTimeoutSeconds,
+      'invalid_timeout',
       'timeout_too_large'
     );
     const maxOutputBytes = clampInt(
@@ -59,6 +76,7 @@ export class ExecRunner {
       this.config.defaultMaxOutputBytes,
       1,
       this.config.hardMaxOutputBytes,
+      'invalid_output_limit',
       'output_limit_too_large'
     );
 
@@ -71,11 +89,23 @@ export class ExecRunner {
     delete env.ENV;
     delete env.BASH_ENV;
 
-    return { command, cwd, timeoutSeconds, maxOutputBytes, env, allowedCwds: this.config.allowedCwds, killGraceSeconds: this.config.killGraceSeconds };
+    const label = sanitizeLabel(req.label);
+    const commandSha256 = createHash('sha256').update(command, 'utf8').digest('hex');
+    const commandPreview = this.config.exposeRedactedCommandPreview
+      ? sanitizePreview(redact(command), this.config.commandPreviewMaxChars)
+      : null;
+
+    return {
+      command, cwd, timeoutSeconds, maxOutputBytes, env, label, commandSha256,
+      commandLength: Buffer.byteLength(command, 'utf8'), commandPreview,
+      allowedCwds: this.config.allowedCwds, killGraceSeconds: this.config.killGraceSeconds
+    };
   }
 
   async run(input, emit, options = {}) {
     this.metrics.requestsTotal++;
+
+    throwIfAborted(options.abortSignal);
 
     let req;
     try {
@@ -87,11 +117,22 @@ export class ExecRunner {
 
     let rec;
     try {
-      rec = this.registry.acquire({ timeoutMs: req.timeoutSeconds * 1000 });
+      rec = this.registry.acquire({
+        timeoutMs: req.timeoutSeconds * 1000,
+        metadata: {
+          label: req.label,
+          commandPreview: req.commandPreview,
+          commandSha256: req.commandSha256,
+          commandLength: req.commandLength,
+          cwd: req.cwd
+        }
+      });
     } catch (err) {
-      if (err instanceof TooManyActiveExecsError) {
+      if (err instanceof TooManyActiveExecsError || err instanceof ExecutionCircuitOpenError) {
         this.bumpRejected(err.code);
-        throw new ExecRejectedError(err.code, err.message);
+        throw new ExecRejectedError(err.code, err.message, err instanceof ExecutionCircuitOpenError
+          ? { reason: err.reason, unconfirmed_count: err.unconfirmedCount }
+          : { active: this.active, max: this.registry.maxActive });
       }
       throw err;
     }
@@ -109,7 +150,7 @@ export class ExecRunner {
     let disconnectCounted = false;
     let heartbeat = null;
     let sigkillTimer = null;
-    const startedAt = new Date(rec.startedAt);
+    const startedAt = new Date(rec.createdAt);
     const tailBufferBytes = Math.min(this.config.ringBufferBytes, req.maxOutputBytes);
     const stdoutTail = new RingBuffer(tailBufferBytes);
     const stderrTail = new RingBuffer(tailBufferBytes);
@@ -117,6 +158,8 @@ export class ExecRunner {
     const send = (event) => emit({ exec_id: execId, ...event });
 
     let child;
+    let finalSummary = null;
+    let spawnFailed = false;
     const killGroup = (signal) => {
       if (childExited || !child?.pid) return;
       killedSignal = signal;
@@ -132,6 +175,7 @@ export class ExecRunner {
       if (sigkillTimer) return;
       sigkillTimer = setTimeout(() => {
         if (!childExited) {
+          this.registry.markKilling(rec.id);
           if (timedOut) send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action });
           killGroup('SIGKILL');
         }
@@ -141,13 +185,16 @@ export class ExecRunner {
 
     const onRegistryAbort = () => {
       const reasonCode = abortReasonCode(rec.controller.signal.reason);
-      if (reasonCode === 'exec_timeout' || reasonCode === 'exec_reaper_abort') {
+      this.bumpMap(this.metrics.abortRequestedTotal, reasonCode);
+      this.logLifecycle(rec.state, rec.id, { abort_source: rec.abortSource, transport_pid: rec.transportPid });
+      if (reasonCode === 'request_timeout' || reasonCode === 'reaper_grace_exceeded') {
         timedOut = true;
         if (!timeoutCounted) {
           timeoutCounted = true;
           this.metrics.timeoutTotal++;
         }
         send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'remote_watchdog', reason: reasonCode });
+        if (reasonCode === 'reaper_grace_exceeded') killGroup('SIGTERM');
         scheduleSigkill(this.config.killGraceSeconds + 2, 'local_sigkill_fallback');
         return;
       } else if (!disconnectCounted) {
@@ -160,18 +207,30 @@ export class ExecRunner {
 
     const clientAbortSignal = options.abortSignal;
     const onClientAbort = () => {
-      this.registry.abort(rec.id, 'client_closed_aborting', new Error('client_closed'));
+      const signalReason = abortReasonCode(clientAbortSignal?.reason);
+      const reason = signalReason === 'mcp_notification_cancel' ? signalReason : (options.abortReason || 'http_disconnect');
+      const source = reason === 'mcp_notification_cancel' ? 'mcp_notification' : (options.abortSource || 'http');
+      this.registry.requestAbort(rec.id, reason, source);
     };
 
     try {
+      options.onAcquire?.(rec);
+      if (clientAbortSignal?.aborted) onClientAbort();
+      throwIfAborted(clientAbortSignal);
+
       const spawned = spawnCommand(this.config, req);
       child = spawned.child;
+      this.registry.markTransportStarted(rec.id, child.pid);
       if (spawned.stdin) child.stdin.end(spawned.stdin);
 
       rec.controller.signal.addEventListener('abort', onRegistryAbort, { once: true });
       clientAbortSignal?.addEventListener('abort', onClientAbort, { once: true });
+      if (clientAbortSignal?.aborted) onClientAbort();
 
-      send({ type: 'start', pid: child.pid, started_at: startedAt.toISOString(), cwd: req.cwd });
+      this.registry.markRunning(rec.id);
+      this.metrics.startedTotal++;
+      this.logLifecycle('running', rec.id, { label: rec.label, transport_pid: child.pid });
+      send({ type: 'start', transport_pid: child.pid, started_at: startedAt.toISOString(), cwd: req.cwd });
 
       const maybeForward = (stream, chunk) => {
         const len = chunk.length;
@@ -212,7 +271,7 @@ export class ExecRunner {
       }, this.config.heartbeatSeconds * 1000);
       heartbeat.unref?.();
 
-      return await new Promise((resolveRun) => {
+      finalSummary = await new Promise((resolveRun) => {
         let finished = false;
 
         const finish = (code, signal) => {
@@ -242,6 +301,7 @@ export class ExecRunner {
         };
 
         child.on('error', (err) => {
+          spawnFailed = true;
           send({ type: 'error', code: 'spawn_failed', message: err.message });
         });
 
@@ -251,8 +311,12 @@ export class ExecRunner {
 
         child.on('close', finish);
       });
+      return finalSummary;
     } catch (err) {
-      if (!child) this.bumpRejected('spawn_failed');
+      if (!child && !rec.abortReason) {
+        spawnFailed = true;
+        this.bumpRejected('spawn_failed');
+      }
       if (err instanceof ExecRejectedError) throw err;
       throw new ExecRejectedError('spawn_failed', err.message);
     } finally {
@@ -260,8 +324,41 @@ export class ExecRunner {
       if (sigkillTimer) clearTimeout(sigkillTimer);
       rec.controller.signal.removeEventListener('abort', onRegistryAbort);
       clientAbortSignal?.removeEventListener('abort', onClientAbort);
-      this.registry.release(rec.id);
+      const finalized = this.registry.finalize(rec.id, {
+        exitCode: finalSummary?.code,
+        signal: finalSummary?.signal,
+        transportExitConfirmed: childExited,
+        spawnFailed
+      });
+      if (finalized.record?.final_state) {
+        this.bumpMap(this.metrics.finishedTotal, finalized.record.final_state);
+        this.logLifecycle(finalized.record.final_state, rec.id, {
+          label: rec.label,
+          exit_code: finalized.record.exit_code,
+          signal: finalized.record.signal,
+          abort_source: finalized.record.abort_source,
+          transport_exit_confirmed: finalized.record.transport_exit_confirmed,
+          remote_exit_confirmed: null
+        });
+      }
     }
+  }
+
+  listActive() {
+    return { active: this.active, max_concurrent: this.registry.maxActive, circuit_open: this.registry.circuitOpen, tasks: this.registry.listActive() };
+  }
+
+  getStatus(execId) { return this.registry.status(execId); }
+
+  cancel(execId) {
+    const result = this.registry.requestCancel(execId);
+    this.bumpMap(this.metrics.cancelRequestsTotal, result.result);
+    return result;
+  }
+
+  logLifecycle(state, execId, fields = {}) {
+    if (this.config.lifecycleLogs === false) return;
+    console.error(`exec_state_change ${JSON.stringify({ exec_id: execId, state, ...fields })}`);
   }
 
   bumpRejected(reason) {
@@ -449,12 +546,31 @@ function trimUtf8Tail(value, maxBytes) {
   return text;
 }
 
-function clampInt(value, fallback, min, max, errorCode) {
+function clampInt(value, fallback, min, max, lowErrorCode, highErrorCode) {
   if (value === undefined || value === null) return fallback;
-  const n = Number.parseInt(String(value), 10);
-  if (!Number.isFinite(n) || n < min) return fallback;
-  if (n > max) throw new ExecRejectedError(errorCode, `${errorCode}: ${n} > ${max}`);
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min) throw new ExecRejectedError(lowErrorCode, `${lowErrorCode}: ${value}`);
+  if (n > max) throw new ExecRejectedError(highErrorCode, `${highErrorCode}: ${n} > ${max}`);
   return n;
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  const reason = signal.reason instanceof Error ? signal.reason.message : String(signal.reason || 'request_cancelled');
+  throw new ExecRejectedError('request_cancelled', reason);
+}
+
+function sanitizeLabel(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new ExecRejectedError('invalid_label', 'label must be a string');
+  const clean = redact(value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim());
+  if (clean.length > 120) throw new ExecRejectedError('invalid_label', 'label must be at most 120 characters');
+  return clean || null;
+}
+
+function sanitizePreview(value, maxChars) {
+  const clean = String(value).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return clean.slice(0, maxChars);
 }
 
 function isAllowedCwd(cwd, allowedCwds) {

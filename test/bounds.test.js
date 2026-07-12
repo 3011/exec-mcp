@@ -29,6 +29,29 @@ test('timeout above hard maximum is rejected before spawn', () => {
   );
 });
 
+test('zero and negative timeouts are rejected', () => {
+  const runner = makeRunner();
+  assert.throws(() => runner.validate({ command: 'echo ok', cwd: '/tmp', timeout_seconds: 0 }), (err) => err.code === 'invalid_timeout');
+  assert.throws(() => runner.validate({ command: 'echo ok', cwd: '/tmp', timeout_seconds: -1 }), (err) => err.code === 'invalid_timeout');
+});
+
+test('command metadata is fingerprinted without exposing command by default', () => {
+  const runner = makeRunner();
+  const req = runner.validate({ command: "docker login -p 'secret value'", label: 'build\npassword=hunter2', cwd: '/tmp' });
+  assert.equal(req.commandPreview, null);
+  assert.equal(req.commandSha256.length, 64);
+  assert.equal(req.label.includes('hunter2'), false);
+  assert.equal(req.label.includes('\n'), false);
+});
+
+test('optional command preview redacts common CLI and URL credentials', () => {
+  const runner = makeRunner({ EXPOSE_REDACTED_COMMAND_PREVIEW: 'true' });
+  const req = runner.validate({ command: "docker login -p 'secret value'; curl 'https://user:token@example.com'", cwd: '/tmp' });
+  assert.equal(req.commandPreview.includes('secret value'), false);
+  assert.equal(req.commandPreview.includes('user:token@'), false);
+  assert.match(req.commandPreview, /REDACTED/);
+});
+
 test('output limit above hard maximum is rejected before spawn', () => {
   const runner = makeRunner();
   assert.throws(

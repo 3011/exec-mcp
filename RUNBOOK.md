@@ -23,6 +23,7 @@ Important context for agents:
 - Output can be truncated; use byte counts and `truncated=true` to detect this.
 - `too_many_active_execs` means the active limit is currently reached. The message includes `active`, `max`, `oldest_age_seconds`, and `states`.
 - v11 has no cancel-by-exec-id API. Only the current connected request can be aborted by client disconnect.
+- v12 provides `list_active_execs`, `get_exec_status`, and `cancel_exec`. These are operator-wide controls for a trusted single-tenant connector and remain callable when execution capacity is full.
 
 ## Validate
 
@@ -79,6 +80,8 @@ Recovery options:
 1. wait for timeout/reaper;
 2. restart `deploy/ssh-mcp` or `deploy/exec-mcp`;
 3. inspect pod-local processes if a local child is stuck.
+
+For v12, query `list_active_execs` first and use `cancel_exec` for a selected execution. If `execution_circuit_open` is returned, inspect recent status for `unconfirmed_reaped`. New executions remain blocked until a late SSH transport close clears the diagnostic or the deployment is deliberately restarted. A confirmed local SSH transport close does not prove every remote descendant exited.
 
 ### Argo revert
 

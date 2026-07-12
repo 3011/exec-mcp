@@ -18,6 +18,12 @@ export function parseConfig(env = process.env) {
     fileMaxUploadBytes: positiveInt(env.FILE_MAX_UPLOAD_BYTES, 10 * 1024 * 1024),
     ringBufferBytes: positiveInt(env.RING_BUFFER_BYTES, 65536),
     maxConcurrentExecs: positiveInt(env.MAX_CONCURRENT_EXECS, 2),
+    recentHistoryLimit: positiveInt(env.RECENT_EXEC_HISTORY_LIMIT, 100),
+    registryReapGraceSeconds: positiveInt(env.REGISTRY_REAP_GRACE_SECONDS, 30),
+    emergencyReapSeconds: positiveInt(env.EMERGENCY_REAP_SECONDS, 30),
+    exposeRedactedCommandPreview: String(env.EXPOSE_REDACTED_COMMAND_PREVIEW || 'false').toLowerCase() === 'true',
+    commandPreviewMaxChars: positiveInt(env.COMMAND_PREVIEW_MAX_CHARS, 160),
+    lifecycleLogs: String(env.LIFECYCLE_LOGS || 'true').toLowerCase() !== 'false',
     heartbeatSeconds: positiveInt(env.HEARTBEAT_SECONDS, 15),
     killGraceSeconds: positiveInt(env.KILL_GRACE_SECONDS, 5),
     remote: {

@@ -17,8 +17,56 @@ class FileToolError extends Error {
   }
 }
 
+class McpRequestRegistry {
+  constructor() { this.sessions = new Map(); }
+  register(sessionId, requestId) {
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      session = new Map();
+      this.sessions.set(sessionId, session);
+    }
+    const key = typedRequestKey(requestId);
+    if (session.has(key)) {
+      const err = new Error('duplicate in-flight MCP request id');
+      err.code = 'duplicate_request_id';
+      throw err;
+    }
+    const record = {
+      requestId,
+      typedRequestId: key,
+      abortController: new AbortController(),
+      execId: null,
+      createdAt: Date.now(),
+      cancelSource: null,
+      completed: false
+    };
+    session.set(record.typedRequestId, record);
+    return record;
+  }
+  get(sessionId, requestId) { return this.sessions.get(sessionId)?.get(typedRequestKey(requestId)) || null; }
+  remove(sessionId, requestId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    const removed = session.delete(typedRequestKey(requestId));
+    if (session.size === 0) this.sessions.delete(sessionId);
+    return removed;
+  }
+  get size() {
+    let size = 0;
+    for (const session of this.sessions.values()) size += session.size;
+    return size;
+  }
+}
+
+function typedRequestKey(requestId) {
+  if (typeof requestId === 'number') return `number:${requestId}`;
+  if (typeof requestId === 'string') return `string:${requestId}`;
+  return `${typeof requestId}:${JSON.stringify(requestId)}`;
+}
+
 export function createServer(config = parseConfig()) {
   const runner = new ExecRunner(config);
+  const mcpRequests = new McpRequestRegistry();
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -40,7 +88,7 @@ export function createServer(config = parseConfig()) {
       }
 
       if (req.method === 'POST' && req.url === '/mcp') {
-        await handleMcp(req, res, runner);
+        await handleMcp(req, res, runner, mcpRequests);
         return;
       }
 
@@ -53,7 +101,7 @@ export function createServer(config = parseConfig()) {
     }
   });
 
-  return { server, runner, config };
+  return { server, runner, config, mcpRequests };
 }
 
 async function handleSseExec(req, res, runner) {
@@ -69,49 +117,73 @@ async function handleSseExec(req, res, runner) {
   const abortController = new AbortController();
   let finished = false;
   const abortIfOpen = () => {
-    if (!finished) abortController.abort();
+    if (!finished && !abortController.signal.aborted) abortController.abort(new Error('http_disconnect'));
   };
-  req.on('close', abortIfOpen);
-  res.on('close', abortIfOpen);
+  const onResponseClose = () => {
+    if (!res.writableEnded) abortIfOpen();
+  };
+  req.on('aborted', abortIfOpen);
+  res.on('close', onResponseClose);
 
   const emit = (event) => writeSse(res, event.type || 'message', event);
   try {
-    await runner.run(body, emit, { abortSignal: abortController.signal });
+    await runner.run(body, emit, { abortSignal: abortController.signal, abortReason: 'http_disconnect', abortSource: 'http' });
   } catch (err) {
     const code = err instanceof ExecRejectedError ? err.code : 'internal_error';
     writeSse(res, 'error', { type: 'error', code, message: err.message });
   } finally {
     finished = true;
+    req.removeListener('aborted', abortIfOpen);
+    res.removeListener('close', onResponseClose);
     res.end();
   }
 }
 
-async function handleMcp(req, res, runner) {
-  const body = await readJson(req, runner.config.mcpMaxRequestBytes || DEFAULT_MCP_MAX_REQUEST_BYTES);
-  const sessionId = req.headers['mcp-session-id'] || randomUUID();
-  res.setHeader('mcp-session-id', sessionId);
-  res.setHeader('content-type', 'application/json');
+async function handleMcp(req, res, runner, mcpRequests) {
+  const disconnectController = new AbortController();
+  let disconnectHandled = false;
+  const abortForDisconnect = () => {
+    if (disconnectHandled) return;
+    disconnectHandled = true;
+    disconnectController.abort(new Error('http_disconnect'));
+  };
+  const onAborted = () => abortForDisconnect();
+  const onResponseClose = () => {
+    if (!res.writableEnded) abortForDisconnect();
+  };
+  req.on('aborted', onAborted);
+  res.on('close', onResponseClose);
 
-  if (Array.isArray(body)) {
-    const out = [];
-    for (const item of body) {
-      const r = await handleMcpMessage(item, runner);
-      if (r) out.push(r);
+  try {
+    const body = await readJson(req, runner.config.mcpMaxRequestBytes || DEFAULT_MCP_MAX_REQUEST_BYTES);
+    const sessionId = req.headers['mcp-session-id'] || randomUUID();
+    res.setHeader('mcp-session-id', sessionId);
+    res.setHeader('content-type', 'application/json');
+    const context = { sessionId: String(sessionId), signal: disconnectController.signal, mcpRequests };
+    if (Array.isArray(body)) {
+      const out = [];
+      for (const item of body) {
+        const r = await handleMcpMessage(item, runner, { ...context, isBatch: true });
+        if (r) out.push(r);
+      }
+      res.end(JSON.stringify(out));
+      return;
     }
-    res.end(JSON.stringify(out));
-    return;
-  }
 
-  const response = await handleMcpMessage(body, runner);
-  if (!response) {
-    res.statusCode = 202;
-    res.end('{}');
-    return;
+    const response = await handleMcpMessage(body, runner, { ...context, isBatch: false });
+    if (!response) {
+      res.statusCode = 202;
+      res.end('{}');
+      return;
+    }
+    res.end(JSON.stringify(response));
+  } finally {
+    req.removeListener('aborted', onAborted);
+    res.removeListener('close', onResponseClose);
   }
-  res.end(JSON.stringify(response));
 }
 
-async function handleMcpMessage(msg, runner) {
+async function handleMcpMessage(msg, runner, context) {
   if (!msg || typeof msg !== 'object') return jsonError(null, -32600, 'Invalid Request');
   const id = msg.id ?? null;
   const method = msg.method;
@@ -123,17 +195,27 @@ async function handleMcpMessage(msg, runner) {
       result: {
         protocolVersion: msg.params?.protocolVersion || '2025-11-25',
         capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: 'exec-mcp', version: '0.2.1' }
+        serverInfo: { name: 'exec-mcp', version: '0.3.0-v12' }
       }
     };
   }
 
-  if (method === 'notifications/initialized' || method === 'notifications/cancelled') {
+  if (method === 'notifications/initialized') {
+    return null;
+  }
+
+  if (method === 'notifications/cancelled') {
+    const record = context.mcpRequests.get(context.sessionId, msg.params?.requestId);
+    if (record) {
+      record.cancelSource = 'mcp_notification';
+      record.abortController.abort(new Error('mcp_notification_cancel'));
+      if (record.execId) runner.registry.requestAbort(record.execId, 'mcp_notification_cancel', 'mcp_notification');
+    }
     return null;
   }
 
   if (method === 'tools/list') {
-    return { jsonrpc: '2.0', id, result: { tools: [execToolSchema(), downloadFileToolSchema(), uploadFileToolSchema()] } };
+    return { jsonrpc: '2.0', id, result: { tools: [execToolSchema(), listActiveExecsToolSchema(), getExecStatusToolSchema(), cancelExecToolSchema(), downloadFileToolSchema(), uploadFileToolSchema()] } };
   }
 
   if (method === 'tools/call') {
@@ -141,10 +223,38 @@ async function handleMcpMessage(msg, runner) {
     const args = msg.params?.arguments || {};
     try {
       if (name === 'exec') {
+        if (context.isBatch) return toolResult(id, 'exec_not_supported_in_batch: Send exec as a standalone JSON-RPC request.', true);
         const events = [];
-        const summary = await runner.run(args, (event) => events.push(event));
-        const text = renderToolText(summary);
-        return toolResult(id, text, summary.code !== 0 || summary.timed_out === true, execStructuredContent(summary));
+        const requestRecord = context.mcpRequests.register(context.sessionId, id);
+        const abortFromHttp = () => requestRecord.abortController.abort(new Error('http_disconnect'));
+        context.signal?.addEventListener('abort', abortFromHttp, { once: true });
+        if (context.signal?.aborted) abortFromHttp();
+        try {
+          const summary = await runner.run(args, (event) => events.push(event), {
+            abortSignal: requestRecord.abortController.signal,
+            abortReason: requestRecord.cancelSource === 'mcp_notification' ? 'mcp_notification_cancel' : 'http_disconnect',
+            abortSource: requestRecord.cancelSource || 'http',
+            onAcquire: (rec) => { requestRecord.execId = rec.id; }
+          });
+          const text = renderToolText(summary);
+          return toolResult(id, text, summary.code !== 0 || summary.timed_out === true, execStructuredContent(summary));
+        } finally {
+          requestRecord.completed = true;
+          context.signal?.removeEventListener('abort', abortFromHttp);
+          context.mcpRequests.remove(context.sessionId, id);
+        }
+      }
+      if (name === 'list_active_execs') {
+        const result = runner.listActive();
+        return toolResult(id, JSON.stringify(result, null, 2), false, result);
+      }
+      if (name === 'get_exec_status') {
+        const result = runner.getStatus(requireExecId(args));
+        return toolResult(id, JSON.stringify(result, null, 2), !result.found, result);
+      }
+      if (name === 'cancel_exec') {
+        const result = runner.cancel(requireExecId(args));
+        return toolResult(id, JSON.stringify(result, null, 2), result.result === 'exec_not_found', result);
       }
       if (name === 'download_file') {
         const result = await downloadFileTool(args, runner.config);
@@ -156,8 +266,9 @@ async function handleMcpMessage(msg, runner) {
       }
       return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {
-      const code = err instanceof ExecRejectedError || err instanceof FileToolError ? err.code : 'internal_error';
-      return toolResult(id, `${code}: ${err.message}`, true);
+      const code = err instanceof ExecRejectedError || err instanceof FileToolError || err.code === 'duplicate_request_id' ? err.code : 'internal_error';
+      const details = { code, ...(err.details || {}) };
+      return toolResult(id, `${code}: ${err.message}`, true, details);
     }
   }
 
@@ -190,7 +301,8 @@ function execToolSchema() {
         cwd: { type: 'string', description: 'Absolute working directory in the test execution environment. It must be under the configured allowlist after remote realpath/symlink resolution. If omitted, the server uses DEFAULT_CWD.' },
         timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime in seconds before the command is aborted. Values above MAX_TIMEOUT_SECONDS are rejected. On timeout the server sends SIGTERM, then SIGKILL after the configured kill grace period.' },
         max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. The final summary includes byte counts, truncation status, and stdout_tail plus stderr_tail bounded by this value and the server tail limit.' },
-        env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables for the command. Invalid variable names are ignored. ENV and BASH_ENV are removed before spawning.' }
+        env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables for the command. Invalid variable names are ignored. ENV and BASH_ENV are removed before spawning.' },
+        label: { type: 'string', maxLength: 120, description: 'Optional sanitized operator label. Do not include credentials or secrets.' }
       },
       required: ['command'],
       additionalProperties: false
@@ -214,6 +326,39 @@ function execToolSchema() {
       additionalProperties: false
     }
   };
+}
+
+function listActiveExecsToolSchema() {
+  return {
+    name: 'list_active_execs',
+    description: 'List active executions without consuming an execution slot. This is an operator-wide control-plane tool for a trusted single-tenant connection.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: { type: 'object', properties: { active: { type: 'integer' }, max_concurrent: { type: 'integer' }, circuit_open: { type: 'boolean' }, tasks: { type: 'array', items: { type: 'object' } } }, required: ['active', 'max_concurrent', 'circuit_open', 'tasks'], additionalProperties: false }
+  };
+}
+
+function getExecStatusToolSchema() {
+  return {
+    name: 'get_exec_status',
+    description: 'Get one execution from the active registry or bounded recent history.',
+    inputSchema: { type: 'object', properties: { exec_id: { type: 'string' } }, required: ['exec_id'], additionalProperties: false },
+    outputSchema: { type: 'object', additionalProperties: true }
+  };
+}
+
+function cancelExecToolSchema() {
+  return {
+    name: 'cancel_exec',
+    description: 'Idempotently request cancellation of an active execution. Cancellation never releases capacity before runner finalization.',
+    inputSchema: { type: 'object', properties: { exec_id: { type: 'string' } }, required: ['exec_id'], additionalProperties: false },
+    outputSchema: { type: 'object', properties: { exec_id: { type: 'string' }, result: { type: 'string' }, accepted: { type: 'boolean' } }, required: ['exec_id', 'result', 'accepted'], additionalProperties: true }
+  };
+}
+
+function requireExecId(args) {
+  const execId = typeof args?.exec_id === 'string' ? args.exec_id.trim() : '';
+  if (!execId) throw new ExecRejectedError('invalid_exec_id', 'exec_id must be a non-empty string');
+  return execId;
 }
 
 function downloadFileToolSchema() {
@@ -633,6 +778,18 @@ function renderMetrics(runner) {
   lines.push('# HELP exec_active Number of active exec calls');
   lines.push('# TYPE exec_active gauge');
   lines.push(`exec_active ${runner.active}`);
+  lines.push('# HELP exec_mcp_active_execs Number of active exec calls');
+  lines.push('# TYPE exec_mcp_active_execs gauge');
+  lines.push(`exec_mcp_active_execs ${runner.active}`);
+  lines.push(`exec_mcp_exec_started_total ${runner.metrics.startedTotal}`);
+  lines.push(`exec_mcp_execution_circuit_open ${runner.registry.circuitOpen ? 1 : 0}`);
+  lines.push(`exec_mcp_unconfirmed_reaped_total ${runner.registry.metrics.unconfirmedReapedTotal}`);
+  lines.push(`exec_mcp_reaped_total ${runner.registry.metrics.unconfirmedReapedTotal}`);
+  lines.push(`exec_mcp_unconfirmed_reaped_current ${runner.registry.unconfirmed.size}`);
+  lines.push(`exec_mcp_late_transport_close_total ${runner.registry.metrics.lateTransportCloseTotal}`);
+  lines.push(`exec_mcp_registry_invariant_violation_total ${runner.registry.metrics.invariantViolations}`);
+  lines.push(`exec_mcp_recent_history_size ${runner.registry.recent.length}`);
+  lines.push(`exec_mcp_disconnect_abort_total ${runner.metrics.abortRequestedTotal.get('http_disconnect') || 0}`);
   lines.push('# HELP exec_requests_total Total exec calls');
   lines.push('# TYPE exec_requests_total counter');
   lines.push(`exec_requests_total ${runner.metrics.requestsTotal}`);
@@ -649,6 +806,15 @@ function renderMetrics(runner) {
   }
   for (const [code, count] of runner.metrics.exitCodeTotal.entries()) {
     lines.push(`exec_exit_code_total{code="${escapeLabel(code)}"} ${count}`);
+  }
+  for (const [state, count] of runner.metrics.finishedTotal.entries()) {
+    lines.push(`exec_mcp_exec_finished_total{final_state="${escapeLabel(state)}"} ${count}`);
+  }
+  for (const [reason, count] of runner.metrics.abortRequestedTotal.entries()) {
+    lines.push(`exec_mcp_abort_requested_total{reason="${escapeLabel(reason)}"} ${count}`);
+  }
+  for (const [result, count] of runner.metrics.cancelRequestsTotal.entries()) {
+    lines.push(`exec_mcp_cancel_requests_total{result="${escapeLabel(result)}"} ${count}`);
   }
   if (process.memoryUsage) lines.push(`process_resident_memory_bytes ${process.memoryUsage().rss}`);
   return lines.join('\n') + '\n';

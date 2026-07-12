@@ -108,9 +108,13 @@ Output semantics:
 Concurrency semantics:
 
 - Active execs are bounded by `MAX_CONCURRENT_EXECS`.
+- v12 adds operator-wide `list_active_execs`, `get_exec_status`, and idempotent `cancel_exec` control-plane tools. They do not consume execution slots and assume a trusted single-tenant MCP connection.
+- Commands are fingerprinted with SHA-256. Full commands and environments are never stored in status/history; optional labels are sanitized and must not contain secrets. Redacted command previews remain disabled unless `EXPOSE_REDACTED_COMMAND_PREVIEW=true`.
+- An unconfirmed emergency reap opens the execution circuit and rejects new execs until a late local SSH transport close is observed or the service is restarted. Control-plane tools remain available.
 - When full, the tool returns `too_many_active_execs` with `active`, `max`, `oldest_age_seconds`, and `states`.
 - `too_many_active_execs` usually means real concurrency pressure, not necessarily a service fault.
 - v11 tracks active execs through `ExecRegistry` and releases slots through `finally`, timeout abort, client-close abort, and a reaper fallback.
+- v12 keeps legacy metrics for one compatibility cycle and also exposes `exec_mcp_*` lifecycle, cancellation, history, and circuit-breaker metrics.
 
 Cancellation boundary:
 
