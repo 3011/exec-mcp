@@ -110,8 +110,8 @@ Metrics are available on `/metrics` and, when enabled, the separate metrics list
 
 Important metric families include:
 
-- active and total executions;
-- lifecycle transitions and final states;
+- active executions, configured concurrency capacity, and total executions;
+- lifecycle transitions, final states, and execution-duration histograms;
 - timeouts, cancellations, disconnects, and rejections;
 - output bytes and truncation;
 - recent-history and circuit-breaker state;

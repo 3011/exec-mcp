@@ -83,6 +83,10 @@ test('HTTP metrics include rejection and exit counters', async () => {
     const metrics = await fetch(`${base}/metrics`).then((r) => r.text());
     assert.match(metrics, /exec_exit_code_total\{code="3"\} 1/);
     assert.match(metrics, /exec_rejected_total\{reason="invalid_cwd"\} 1/);
+    assert.match(metrics, /exec_mcp_max_concurrent_execs 1/);
+    assert.match(metrics, /exec_mcp_exec_duration_seconds_bucket\{final_state="failed",le="\+Inf"\} 1/);
+    assert.match(metrics, /exec_mcp_exec_duration_seconds_count\{final_state="failed"\} 1/);
+    assert.match(metrics, /exec_mcp_exec_duration_seconds_sum\{final_state="failed"\} [0-9.]+/);
   });
 });
 

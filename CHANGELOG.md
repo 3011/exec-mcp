@@ -4,6 +4,11 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Added
+
+- Prometheus execution-duration histogram grouped by final state.
+- Maximum-concurrency gauge and lifecycle-log duration metadata for operational dashboards.
+
 ## [0.3.0] - 2026-07-18
 
 ### Added

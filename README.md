@@ -22,6 +22,7 @@ A dependency-free Node.js gateway that gives trusted MCP clients bounded remote 
 - Process-group cleanup, timeout escalation, disconnect cancellation, and emergency circuit breaking.
 - Secret-pattern redaction for streamed output and retained tails.
 - Prometheus-compatible metrics and health endpoints.
+- Execution-capacity gauges and duration histograms for latency percentiles.
 - No runtime npm dependencies.
 
 ## MCP tools
