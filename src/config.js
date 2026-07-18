@@ -1,5 +1,5 @@
 export function parseConfig(env = process.env) {
-  const allowedCwds = (env.ALLOWED_CWDS || '/root,/root/config-git,/root/exec-mcp,/tmp,/app')
+  const allowedCwds = (env.ALLOWED_CWDS || '/workspace,/tmp')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -31,11 +31,11 @@ export function parseConfig(env = process.env) {
       binArgs: splitArgs(env.REMOTE_BIN_ARGS || ''),
       host: env.REMOTE_HOST || '',
       port: positiveInt(env.REMOTE_PORT, 22),
-      user: env.REMOTE_USER || 'root',
+      user: env.REMOTE_USER || 'execmcp',
       keyPath: env.REMOTE_KEY_PATH || '',
       connectTimeoutSeconds: positiveInt(env.REMOTE_CONNECT_TIMEOUT_SECONDS, 10),
-      strictHostKeyChecking: env.REMOTE_STRICT_HOST_KEY_CHECKING || 'no',
-      knownHostsPath: env.REMOTE_KNOWN_HOSTS_PATH || '/app/known_hosts'
+      strictHostKeyChecking: env.REMOTE_STRICT_HOST_KEY_CHECKING || 'yes',
+      knownHostsPath: env.REMOTE_KNOWN_HOSTS_PATH || '/run/secrets/known_hosts'
     }
   };
 }

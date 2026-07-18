@@ -1,7 +1,7 @@
 {
   "name": "exec-mcp",
   "version": "0.3.0",
-  "description": "Bounded streaming exec gateway prototype for MCP-style remote operations",
+  "description": "Bounded SSH remote execution and file-transfer gateway for trusted MCP clients",
   "private": true,
   "type": "module",
   "main": "src/server.js",
@@ -15,5 +15,21 @@
     "node": ">=20"
   },
   "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {},
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/3011/exec-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/3011/exec-mcp/issues"
+  },
+  "homepage": "https://github.com/3011/exec-mcp#readme",
+  "keywords": [
+    "mcp",
+    "ssh",
+    "remote-execution",
+    "gateway",
+    "model-context-protocol"
+  ]
 }

@@ -1,103 +1,120 @@
-# exec-mcp runbook
+# exec-mcp operational runbook
 
-## Current state
+This runbook is deployment-neutral. Adapt service, secret, and orchestration commands to your environment.
 
-- Connector service name stays unchanged.
-- Backend image is the exec-mcp implementation.
-- The container is independent.
-- Commands run on dev-debian through remote shell access in the `ssh-mcp` deployment.
-- Do not change dev-pod or mount its PVC.
+## Before deployment
 
-## MCP context
+- Place the HTTP service behind authentication and TLS, or keep it on an authenticated private transport.
+- Permit inbound traffic only from the intended MCP bridge or operator network.
+- Use a dedicated, low-privilege remote SSH account.
+- Restrict the SSH key in `authorized_keys` where practical.
+- Set `REMOTE_STRICT_HOST_KEY_CHECKING=yes` and mount a pinned `known_hosts` file.
+- Set the smallest practical `ALLOWED_CWDS`, timeout, output, file-size, and concurrency limits.
+- Keep command previews disabled unless the operational need outweighs metadata exposure.
+- Review [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
-The MCP server exposes one tool: `exec`.
+## Readiness checks
 
-Important context for agents:
+1. `GET /healthz` returns HTTP 200.
+2. `GET /metrics` returns Prometheus text.
+3. MCP `initialize` reports the expected Semantic Version.
+4. `tools/list` reports all six tools.
+5. A harmless `exec` such as `pwd` runs on the intended remote host and ends with a successful summary.
+6. The returned working directory matches `DEFAULT_CWD` or the requested allowed path.
+7. `list_active_execs` returns zero active tasks when idle.
+8. The service has no unexpected restarts and its memory remains within the configured container limit.
 
-- `command` runs on the configured remote execution host, not in the model or bridge runtime.
-- The command runs through `/bin/sh -c`.
-- `cwd` is a remote working directory and must pass the allowlist.
-- MCP output is a final text response, not live streaming.
-- The final `[exec summary]` is authoritative.
-- stderr text alone does not mean failure.
-- Output can be truncated; use byte counts and `truncated=true` to detect this.
-- `too_many_active_execs` means the active limit is currently reached. The message includes `active`, `max`, `oldest_age_seconds`, and `states`.
-- v11 has no cancel-by-exec-id API. Only the current connected request can be aborted by client disconnect.
-- v12 provides `list_active_execs`, `get_exec_status`, and `cancel_exec`. These are operator-wide controls for a trusted single-tenant connector and remain callable when execution capacity is full.
+## Release procedure
 
-## Validate
-
-- `hostname` should be dev-debian when routed through `ssh-mcp`.
-- `pwd` should match the requested/default remote cwd.
-- `kubectl`, `git`, and `docker` should exist on the target host when expected.
-- Output should end with `[exec summary]`.
-- `exec_active` should return to 0 when no request is running. When checking through the same MCP connector, one active slot may be the check itself.
-- Pod should be Ready with 0 restarts.
-- Argo should be Synced Healthy.
-
-## Release
-
-1. Test the source.
-2. Build and push a new image tag.
-3. Update the GitOps deployment file.
-4. Commit and push.
-5. Wait for Argo sync.
-6. Confirm both `exec-mcp` and `ssh-mcp` deployments use the intended image tag.
+1. Update `package.json` using Semantic Versioning.
+2. Update `CHANGELOG.md`.
+3. Run `npm run validate`.
+4. Build the container locally.
+5. Open and merge a pull request after CI and CodeQL pass.
+6. Tag the merged commit as `v<package-version>`.
+7. Create a GitHub Release from the matching changelog entry.
+8. Verify the matching GHCR tag was published.
+9. Roll out by immutable release tag or digest.
+10. Repeat the readiness checks.
 
 ## Rollback
 
-- Roll back to the previous known-good image tag.
-- For emergency, use `kubectl rollout undo`, then write the rollback to GitOps.
-- Always commit and push the desired rollback state.
+- Roll back to the previous known-good immutable image tag or digest.
+- Verify health, MCP initialization, tool listing, and a harmless remote command.
+- Record the rollback in the deployment source of truth.
+- Preserve logs and recent execution diagnostics if the rollback was caused by a lifecycle or security issue.
 
 ## Troubleshooting
 
-### 502
+### HTTP 502 or connection failure
 
-Check pod readiness, restarts, logs, tunnel health, and Argo status. A short 502 can happen during rollout while the MCP pod restarts.
+Check, in order:
 
-### Missing output
+1. service readiness and restarts;
+2. reverse proxy or authenticated tunnel health;
+3. network policy and service routing;
+4. application logs;
+5. main and metrics listener ports.
 
-Check whether the response is truncated. MCP final text includes only bounded tails plus `[exec summary]`.
+### Remote configuration error
 
-### Remote failure
+The gateway requires both `REMOTE_HOST` and `REMOTE_KEY_PATH`. Also verify:
 
-Check remote service, credential secret, key mount, known_hosts, and `REMOTE_HOST`.
+- the key is readable by the container user;
+- `REMOTE_USER` and `REMOTE_PORT` are correct;
+- the known-hosts path exists;
+- strict host-key verification succeeds;
+- the remote account can enter `DEFAULT_CWD`.
+
+### `invalid_cwd` or file path rejection
+
+- Use an absolute command `cwd`.
+- Confirm the resolved real path is inside `ALLOWED_CWDS`.
+- Check for symlinks that resolve outside the allowlist.
+- For uploads, create the parent directory through an explicitly authorized workflow first.
 
 ### `too_many_active_execs`
 
-Read the diagnostic fields:
+Use `list_active_execs` and inspect task age and state.
 
-- small `oldest_age_seconds`: real concurrency pressure; retry later;
-- near timeout: command is still running or being aborted;
-- far beyond timeout plus grace: check pod logs and consider restarting the deployment;
-- `states=running:*`: active commands are still running;
-- `states=timeout_aborting:*`: timeout abort has fired;
-- `states=client_closed_aborting:*`: client disconnect abort has fired.
+- A small oldest age usually indicates real concurrency pressure.
+- A task near its timeout may already be terminating.
+- Use `cancel_exec` for a specific active execution when appropriate.
+- Do not raise concurrency until remote-host capacity and failure behavior are understood.
 
-Recovery options:
+### `execution_circuit_open`
 
-1. wait for timeout/reaper;
-2. restart `deploy/ssh-mcp` or `deploy/exec-mcp`;
-3. inspect pod-local processes if a local child is stuck.
+The registry observed an execution whose local SSH transport did not confirm exit before emergency reap.
 
-For v12, query `list_active_execs` first and use `cancel_exec` for a selected execution. If `execution_circuit_open` is returned, inspect recent status for `unconfirmed_reaped`. New executions remain blocked until a late SSH transport close clears the diagnostic or the deployment is deliberately restarted. A confirmed local SSH transport close does not prove every remote descendant exited.
+1. Inspect active and recent status records.
+2. Inspect the gateway process tree and logs.
+3. Check the remote host for remaining processes related to the command.
+4. Wait for a late transport-close diagnostic if one is expected.
+5. Restart the service only after deciding the unresolved execution risk is acceptable.
 
-### Argo revert
+### Missing output
 
-Commit and push the desired state to GitOps. Argo self-heal will revert manual changes that are not in Git.
+Read the structured summary:
+
+- `truncated=true` means the forwarding limit was reached;
+- `stdout_bytes` and `stderr_bytes` are total observed byte counts;
+- `stdout_tail` and `stderr_tail` are bounded retained tails, not complete logs.
+
+### Command appears to survive cancellation
+
+Cancellation terminates the local SSH transport process group. A remote program that deliberately daemonizes or detaches may survive. Inspect and terminate it using remote operating-system controls, then reduce the SSH account's privileges or command capabilities to prevent recurrence.
 
 ## Metrics
 
-Metrics are served on `/metrics`.
+Metrics are available on `/metrics` and, when enabled, the separate metrics listener.
 
-Important metrics:
+Important metric families include:
 
-- `exec_active`
-- `exec_requests_total`
-- `exec_timeout_total`
-- `exec_truncated_total`
-- `exec_stream_disconnect_total`
-- `exec_exit_code_total`
-- `exec_output_bytes_total`
-- `process_resident_memory_bytes`
+- active and total executions;
+- lifecycle transitions and final states;
+- timeouts, cancellations, disconnects, and rejections;
+- output bytes and truncation;
+- recent-history and circuit-breaker state;
+- process memory.
+
+Alert on sustained capacity exhaustion, circuit-open state, repeated timeouts, unusual cancellation volume, and container restarts.

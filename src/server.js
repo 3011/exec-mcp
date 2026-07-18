@@ -2,9 +2,11 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { parseConfig } from './config.js';
 import { ExecRunner, ExecRejectedError, spawnRemoteShell } from './exec-runner.js';
 
+const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const DEFAULT_MCP_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_FILE_DOWNLOAD_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILE_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -195,7 +197,7 @@ async function handleMcpMessage(msg, runner, context) {
       result: {
         protocolVersion: msg.params?.protocolVersion || '2025-11-25',
         capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: 'exec-mcp', version: '0.3.0-v12' }
+        serverInfo: { name: 'exec-mcp', version: PACKAGE_VERSION }
       }
     };
   }
