@@ -38,6 +38,8 @@ export class ExecRunner {
       exitCodeTotal: new Map(),
       outputBytesTotal: { stdout: 0, stderr: 0 },
       durationMsTotal: 0,
+      durationSecondsBuckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800],
+      durationSecondsByState: new Map(),
       startedTotal: 0,
       abortRequestedTotal: new Map(),
       cancelRequestsTotal: new Map(),
@@ -332,11 +334,13 @@ export class ExecRunner {
       });
       if (finalized.record?.final_state) {
         this.bumpMap(this.metrics.finishedTotal, finalized.record.final_state);
+        this.observeDuration(finalized.record.final_state, finalized.record.duration_ms);
         this.logLifecycle(finalized.record.final_state, rec.id, {
           label: rec.label,
           exit_code: finalized.record.exit_code,
           signal: finalized.record.signal,
           abort_source: finalized.record.abort_source,
+          duration_ms: finalized.record.duration_ms,
           transport_exit_confirmed: finalized.record.transport_exit_confirmed,
           remote_exit_confirmed: null
         });
@@ -359,6 +363,21 @@ export class ExecRunner {
   logLifecycle(state, execId, fields = {}) {
     if (this.config.lifecycleLogs === false) return;
     console.error(`exec_state_change ${JSON.stringify({ exec_id: execId, state, ...fields })}`);
+  }
+
+  observeDuration(finalState, durationMs) {
+    if (!Number.isFinite(durationMs) || durationMs < 0) return;
+    const seconds = durationMs / 1000;
+    let histogram = this.metrics.durationSecondsByState.get(finalState);
+    if (!histogram) {
+      histogram = { count: 0, sum: 0, buckets: this.metrics.durationSecondsBuckets.map(() => 0) };
+      this.metrics.durationSecondsByState.set(finalState, histogram);
+    }
+    histogram.count++;
+    histogram.sum += seconds;
+    this.metrics.durationSecondsBuckets.forEach((upperBound, index) => {
+      if (seconds <= upperBound) histogram.buckets[index]++;
+    });
   }
 
   bumpRejected(reason) {

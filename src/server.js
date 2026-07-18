@@ -783,6 +783,9 @@ function renderMetrics(runner) {
   lines.push('# HELP exec_mcp_active_execs Number of active exec calls');
   lines.push('# TYPE exec_mcp_active_execs gauge');
   lines.push(`exec_mcp_active_execs ${runner.active}`);
+  lines.push('# HELP exec_mcp_max_concurrent_execs Configured maximum concurrent executions');
+  lines.push('# TYPE exec_mcp_max_concurrent_execs gauge');
+  lines.push(`exec_mcp_max_concurrent_execs ${runner.registry.maxActive}`);
   lines.push(`exec_mcp_exec_started_total ${runner.metrics.startedTotal}`);
   lines.push(`exec_mcp_execution_circuit_open ${runner.registry.circuitOpen ? 1 : 0}`);
   lines.push(`exec_mcp_unconfirmed_reaped_total ${runner.registry.metrics.unconfirmedReapedTotal}`);
@@ -811,6 +814,16 @@ function renderMetrics(runner) {
   }
   for (const [state, count] of runner.metrics.finishedTotal.entries()) {
     lines.push(`exec_mcp_exec_finished_total{final_state="${escapeLabel(state)}"} ${count}`);
+  }
+  lines.push('# HELP exec_mcp_exec_duration_seconds Execution duration from acquisition to finalization');
+  lines.push('# TYPE exec_mcp_exec_duration_seconds histogram');
+  for (const [state, histogram] of runner.metrics.durationSecondsByState.entries()) {
+    runner.metrics.durationSecondsBuckets.forEach((upperBound, index) => {
+      lines.push(`exec_mcp_exec_duration_seconds_bucket{final_state="${escapeLabel(state)}",le="${upperBound}"} ${histogram.buckets[index]}`);
+    });
+    lines.push(`exec_mcp_exec_duration_seconds_bucket{final_state="${escapeLabel(state)}",le="+Inf"} ${histogram.count}`);
+    lines.push(`exec_mcp_exec_duration_seconds_sum{final_state="${escapeLabel(state)}"} ${histogram.sum}`);
+    lines.push(`exec_mcp_exec_duration_seconds_count{final_state="${escapeLabel(state)}"} ${histogram.count}`);
   }
   for (const [reason, count] of runner.metrics.abortRequestedTotal.entries()) {
     lines.push(`exec_mcp_abort_requested_total{reason="${escapeLabel(reason)}"} ${count}`);
