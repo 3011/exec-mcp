@@ -81,12 +81,15 @@ test('HTTP metrics include rejection and exit counters', async () => {
       body: JSON.stringify({ command: 'pwd', cwd: '/etc' })
     }).then((r) => r.text());
     const metrics = await fetch(`${base}/metrics`).then((r) => r.text());
-    assert.match(metrics, /exec_exit_code_total\{code="3"\} 1/);
-    assert.match(metrics, /exec_rejected_total\{reason="invalid_cwd"\} 1/);
+    assert.match(metrics, /exec_mcp_exit_code_total\{code="3"\} 1/);
+    assert.match(metrics, /exec_mcp_rejected_total\{reason="invalid_cwd"\} 1/);
     assert.match(metrics, /exec_mcp_max_concurrent_execs 1/);
     assert.match(metrics, /exec_mcp_exec_duration_seconds_bucket\{final_state="failed",le="\+Inf"\} 1/);
     assert.match(metrics, /exec_mcp_exec_duration_seconds_count\{final_state="failed"\} 1/);
     assert.match(metrics, /exec_mcp_exec_duration_seconds_sum\{final_state="failed"\} [0-9.]+/);
+    assert.match(metrics, /exec_mcp_requests_total 2/);
+    assert.doesNotMatch(metrics, /(?:^|\n)exec_(?:active|requests_total|timeout_total|truncated_total|stream_disconnect_total|output_bytes_total|rejected_total|killed_total|exit_code_total|reaped_total)(?:\{| |$)/);
+    assert.doesNotMatch(metrics, /(?:^|\n)exec_mcp_(?:reaped_total|disconnect_abort_total)(?:\{| |$)/);
   });
 });
 

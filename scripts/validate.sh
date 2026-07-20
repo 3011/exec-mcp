@@ -43,6 +43,6 @@ grep -q 'event: exit' "$OUT_FILE"
 grep -q 'hello' "$OUT_FILE"
 grep -q 'warn' "$OUT_FILE"
 
-curl -fsS "http://127.0.0.1:${PORT_VALUE}/metrics" | grep -q 'exec_requests_total'
+curl -fsS "http://127.0.0.1:${PORT_VALUE}/metrics" | grep -q 'exec_mcp_requests_total'
 
 echo "validation ok"
