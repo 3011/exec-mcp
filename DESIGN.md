@@ -22,6 +22,16 @@ remote non-interactive /bin/sh
 
 The implementation is written in strict TypeScript, compiles to JavaScript for Node.js, and uses Node.js core modules only at runtime. Runtime state is in memory and is lost on restart.
 
+The source is split by responsibility without adding runtime frameworks:
+
+- `server.ts` composes dependencies and owns HTTP/SSE startup, routing, and shutdown;
+- `mcp-handler.ts` owns MCP request tracking and JSON-RPC method dispatch;
+- `tool-schemas.ts` contains the stable MCP tool schema objects;
+- `file-tools.ts` owns validated upload/download handling and remote file scripts;
+- `metrics.ts` renders Prometheus text from the existing runner and registry state.
+
+`server.ts` is the composition root. Lower-level modules do not import initialized server state or import `server.ts`.
+
 ## Public interfaces
 
 ### HTTP/SSE
@@ -184,4 +194,4 @@ npm run build
 npm run validate
 ```
 
-The current suite contains 53 passing tests.
+The current suite contains 57 passing tests.

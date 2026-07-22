@@ -54,6 +54,19 @@ test('initial metrics text and content type remain stable', async () => {
   });
 });
 
+test('MCP notification keeps the existing no-response behavior', async () => {
+  await withServer(async (base) => {
+    const response = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })
+    });
+    assert.equal(response.status, 202);
+    assert.equal(response.headers.get('content-type'), 'application/json');
+    assert.equal(await response.text(), '{}');
+  });
+});
+
 test('standalone server exits cleanly on SIGTERM', async () => {
   const child = spawn(process.execPath, ['dist/src/server.js'], {
     cwd: new URL('..', import.meta.url),

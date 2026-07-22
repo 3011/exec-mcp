@@ -122,6 +122,21 @@ test('MCP download_file and upload_file transfer binary files inside allowlist',
     assert.equal(emptyDownload.result.isError, false);
     assert.equal(JSON.parse(emptyDownload.result.content[0].text).data_base64, '');
 
+    const specialPath = 'space ü [1].bin';
+    const specialBytes = Buffer.from('special-path');
+    const specialUpload = await mcpCall(base, 14, 'upload_file', {
+      path: specialPath,
+      data_base64: specialBytes.toString('base64')
+    });
+    assert.equal(specialUpload.result.isError, false);
+    const specialDownload = await mcpCall(base, 15, 'download_file', { path: specialPath });
+    assert.equal(specialDownload.result.isError, false);
+    assert.equal(JSON.parse(specialDownload.result.content[0].text).data_base64, specialBytes.toString('base64'));
+
+    const missing = await mcpCall(base, 16, 'download_file', { path: 'missing.bin' });
+    assert.equal(missing.result.isError, true);
+    assert.match(missing.result.content[0].text, /not_found/);
+
     await mcpCall(base, 7, 'upload_file', { path: 'append.bin', data_base64: Buffer.from([1, 2]).toString('base64') });
     const append = await mcpCall(base, 8, 'upload_file', { path: 'append.bin', data_base64: Buffer.from([3]).toString('base64'), append: true });
     assert.equal(append.result.isError, false);
