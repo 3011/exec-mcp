@@ -38,6 +38,9 @@ jobs:
       - name: Unit tests
         run: npm run test:compiled
 
+      - name: Memory smoke test
+        run: bash scripts/memory-smoke.sh
+
   docker:
     name: Docker image
     runs-on: ubuntu-latest

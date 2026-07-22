@@ -45,4 +45,6 @@ grep -q 'warn' "$OUT_FILE"
 
 curl -fsS "http://127.0.0.1:${PORT_VALUE}/metrics" | grep -q 'exec_mcp_requests_total'
 
+bash scripts/memory-smoke.sh
+
 echo "validation ok"

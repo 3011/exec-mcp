@@ -169,9 +169,10 @@ For all lifecycle and circuit-breaker settings, see [DESIGN.md](DESIGN.md).
 ## Development
 
 ```bash
-npm test          # 53 tests
-npm run build     # strict type-check and compile to dist/
-npm run validate  # strict build, tests, and local HTTP/SSE smoke test
+npm test             # strict build and 53 tests
+npm run build        # strict type-check and compile to dist/
+npm run test:memory  # bounded-output and RSS smoke test
+npm run validate     # tests, HTTP/SSE, and memory smoke tests
 ```
 
 CI runs the test suite and builds the container. CodeQL and Dependabot configuration are included in the repository.
