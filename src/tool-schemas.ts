@@ -1,0 +1,129 @@
+function execToolSchema() {
+  return {
+    name: 'exec',
+    description: 'Run one non-interactive command in the configured test execution environment and return a bounded final text result with stdout/stderr tails plus an exec summary. The request is accepted only after cwd allowlist validation, runtime/output limits, environment filtering, and concurrency checks. Commands are evaluated by the environment command processor (/bin/sh -c), so use this for controlled diagnostics, validation, and test-environment maintenance tasks rather than interactive sessions or long-running services. This tool can run high-risk commands when they are intentionally requested for an approved isolated test scenario. Output may be truncated. The final [exec summary] is authoritative for exit code, signal, timeout, duration, byte counts, and truncation. stderr output alone does not mean failure; non-zero exit code, signal, or timed_out=true means failure. If capacity is full, too_many_active_execs reports active/max/oldest_age_seconds/states for diagnosis.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Non-interactive command for the configured test execution environment. Use explicit quoting for pipelines, redirection, &&, and environment expansion. Avoid privileged, destructive, interactive, or unbounded long-running operations unless they are part of an approved isolated test scenario.' },
+        cwd: { type: 'string', description: 'Absolute working directory in the test execution environment. It must be under the configured allowlist after remote realpath/symlink resolution. If omitted, the server uses DEFAULT_CWD.' },
+        timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime in seconds before the command is aborted. Values above MAX_TIMEOUT_SECONDS are rejected. On timeout the server sends SIGTERM, then SIGKILL after the configured kill grace period.' },
+        max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded before truncation. The process is still drained until exit. The final summary includes byte counts, truncation status, and stdout_tail plus stderr_tail bounded by this value and the server tail limit.' },
+        env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables for the command. Invalid variable names are ignored. ENV and BASH_ENV are removed before spawning.' },
+        label: { type: 'string', maxLength: 120, description: 'Optional sanitized operator label. Do not include credentials or secrets.' }
+      },
+      required: ['command'],
+      additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        exec_id: { type: 'string', description: 'Unique identifier for this exec call.' },
+        type: { type: 'string', enum: ['exit'], description: 'Final event type for the command.' },
+        code: { type: ['integer', 'null'], description: 'Process exit code. Null when the process ended by signal before reporting a code.' },
+        signal: { type: ['string', 'null'], description: 'Signal associated with process termination, or null.' },
+        duration_ms: { type: 'integer', minimum: 0, description: 'Command runtime in milliseconds.' },
+        stdout_bytes: { type: 'integer', minimum: 0, description: 'Total stdout bytes observed before redaction.' },
+        stderr_bytes: { type: 'integer', minimum: 0, description: 'Total stderr bytes observed before redaction.' },
+        truncated: { type: 'boolean', description: 'True when forwarded output exceeded max_output_bytes.' },
+        timed_out: { type: 'boolean', description: 'True when the command exceeded timeout_seconds.' },
+        stdout_tail: { type: 'string', description: 'Redacted tail of stdout retained for final inspection. stdout_tail plus stderr_tail is bounded by max_output_bytes and the server tail limit.' },
+        stderr_tail: { type: 'string', description: 'Redacted tail of stderr retained for final inspection. stdout_tail plus stderr_tail is bounded by max_output_bytes and the server tail limit.' }
+      },
+      required: ['exec_id', 'type', 'code', 'signal', 'duration_ms', 'stdout_bytes', 'stderr_bytes', 'truncated', 'timed_out', 'stdout_tail', 'stderr_tail'],
+      additionalProperties: false
+    }
+  };
+}
+
+function listActiveExecsToolSchema() {
+  return {
+    name: 'list_active_execs',
+    description: 'List active executions without consuming an execution slot. This is an operator-wide control-plane tool for a trusted single-tenant connection.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: { type: 'object', properties: { active: { type: 'integer' }, max_concurrent: { type: 'integer' }, circuit_open: { type: 'boolean' }, tasks: { type: 'array', items: { type: 'object' } } }, required: ['active', 'max_concurrent', 'circuit_open', 'tasks'], additionalProperties: false }
+  };
+}
+
+function getExecStatusToolSchema() {
+  return {
+    name: 'get_exec_status',
+    description: 'Get one execution from the active registry or bounded recent history.',
+    inputSchema: { type: 'object', properties: { exec_id: { type: 'string' } }, required: ['exec_id'], additionalProperties: false },
+    outputSchema: { type: 'object', additionalProperties: true }
+  };
+}
+
+function cancelExecToolSchema() {
+  return {
+    name: 'cancel_exec',
+    description: 'Idempotently request cancellation of an active execution. Cancellation never releases capacity before runner finalization.',
+    inputSchema: { type: 'object', properties: { exec_id: { type: 'string' } }, required: ['exec_id'], additionalProperties: false },
+    outputSchema: { type: 'object', properties: { exec_id: { type: 'string' }, result: { type: 'string' }, accepted: { type: 'boolean' } }, required: ['exec_id', 'result', 'accepted'], additionalProperties: true }
+  };
+}
+
+function downloadFileToolSchema() {
+  return {
+    name: 'download_file',
+    description: 'Download one file from the configured test execution environment after path allowlist validation. The response is JSON text containing file metadata and data_base64 so binary files such as images, PDFs, documents, spreadsheets, and archives can be transferred through MCP. Relative paths are resolved from DEFAULT_CWD. Files larger than max_bytes or FILE_MAX_DOWNLOAD_BYTES are rejected instead of truncated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path to download. Absolute paths are validated directly; relative paths are resolved from DEFAULT_CWD. The final path must be under ALLOWED_CWDS.' },
+        max_bytes: { type: 'integer', minimum: 1, description: 'Maximum file size allowed for this download. If omitted, the server uses FILE_MAX_DOWNLOAD_BYTES or the built-in default.' }
+      },
+      required: ['path'],
+      additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Resolved real path of the downloaded file in the test execution environment.' },
+        bytes: { type: 'integer', minimum: 0, description: 'Number of decoded file bytes.' },
+        mime_type: { type: 'string', description: 'Best-effort MIME type derived from the file extension.' },
+        data_base64: { type: 'string', description: 'Base64-encoded raw file bytes.' }
+      },
+      required: ['path', 'bytes', 'mime_type', 'data_base64'],
+      additionalProperties: false
+    }
+  };
+}
+
+function uploadFileToolSchema() {
+  return {
+    name: 'upload_file',
+    description: 'Upload one file to the configured test execution environment after path allowlist validation and decoded-size checks. The request carries raw file bytes as data_base64 so binary files such as images, PDFs, documents, spreadsheets, and archives can be transferred through MCP. Relative paths are resolved from DEFAULT_CWD. Parent directories must already exist.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path to upload. Absolute paths are validated directly; relative paths are resolved from DEFAULT_CWD. The final path must be under ALLOWED_CWDS.' },
+        data_base64: { type: 'string', description: 'Base64-encoded raw file bytes. The decoded byte length must not exceed FILE_MAX_UPLOAD_BYTES or the built-in default.' },
+        mime_type: { type: 'string', description: 'Optional advisory MIME type for client bookkeeping. The server does not enforce file extensions from this value.' },
+        append: { type: 'boolean', description: 'Append decoded bytes to the file when true. If false or omitted, replace the file content.' }
+      },
+      required: ['path', 'data_base64'],
+      additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Resolved real path of the uploaded file in the test execution environment.' },
+        bytes: { type: 'integer', minimum: 0, description: 'Number of decoded bytes written.' },
+        action: { type: 'string', enum: ['write', 'append'], description: 'Whether the operation replaced or appended file content.' },
+        mime_type: { type: 'string', description: 'Advisory MIME type supplied by the caller or inferred from the file extension.' }
+      },
+      required: ['path', 'bytes', 'action', 'mime_type'],
+      additionalProperties: false
+    }
+  };
+}
+
+export const TOOL_SCHEMAS = [
+  execToolSchema(),
+  listActiveExecsToolSchema(),
+  getExecStatusToolSchema(),
+  cancelExecToolSchema(),
+  downloadFileToolSchema(),
+  uploadFileToolSchema()
+];
