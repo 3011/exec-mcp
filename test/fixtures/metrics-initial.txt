@@ -1,0 +1,46 @@
+# HELP exec_mcp_active_execs Number of active exec calls
+# TYPE exec_mcp_active_execs gauge
+exec_mcp_active_execs 0
+# HELP exec_mcp_max_concurrent_execs Configured maximum concurrent executions
+# TYPE exec_mcp_max_concurrent_execs gauge
+exec_mcp_max_concurrent_execs 1
+# HELP exec_mcp_requests_total Total validated and rejected exec requests
+# TYPE exec_mcp_requests_total counter
+exec_mcp_requests_total 0
+# HELP exec_mcp_exec_started_total Total executions that acquired capacity and started
+# TYPE exec_mcp_exec_started_total counter
+exec_mcp_exec_started_total 0
+# HELP exec_mcp_timeout_total Total executions aborted by their request timeout
+# TYPE exec_mcp_timeout_total counter
+exec_mcp_timeout_total 0
+# HELP exec_mcp_truncated_total Total executions whose forwarded output exceeded its configured limit
+# TYPE exec_mcp_truncated_total counter
+exec_mcp_truncated_total 0
+# HELP exec_mcp_stream_disconnect_total Total active execution streams interrupted by a client or cancellation signal
+# TYPE exec_mcp_stream_disconnect_total counter
+exec_mcp_stream_disconnect_total 0
+# HELP exec_mcp_output_bytes_total Total bytes read from remote command output
+# TYPE exec_mcp_output_bytes_total counter
+exec_mcp_output_bytes_total{stream="stdout"} 0
+exec_mcp_output_bytes_total{stream="stderr"} 0
+# HELP exec_mcp_execution_circuit_open Whether the execution safety circuit is open
+# TYPE exec_mcp_execution_circuit_open gauge
+exec_mcp_execution_circuit_open 0
+# HELP exec_mcp_unconfirmed_reaped_total Total unconfirmed executions force-reaped from capacity accounting
+# TYPE exec_mcp_unconfirmed_reaped_total counter
+exec_mcp_unconfirmed_reaped_total 0
+# HELP exec_mcp_unconfirmed_reaped_current Current unconfirmed force-reaped executions
+# TYPE exec_mcp_unconfirmed_reaped_current gauge
+exec_mcp_unconfirmed_reaped_current 0
+# HELP exec_mcp_late_transport_close_total Total transport closes observed after force reaping
+# TYPE exec_mcp_late_transport_close_total counter
+exec_mcp_late_transport_close_total 0
+# HELP exec_mcp_registry_invariant_violation_total Total execution registry invariant violations
+# TYPE exec_mcp_registry_invariant_violation_total counter
+exec_mcp_registry_invariant_violation_total 0
+# HELP exec_mcp_recent_history_size Current bounded execution history size
+# TYPE exec_mcp_recent_history_size gauge
+exec_mcp_recent_history_size 0
+# HELP exec_mcp_exec_duration_seconds Execution duration from acquisition to finalization
+# TYPE exec_mcp_exec_duration_seconds histogram
+process_resident_memory_bytes <rss>
