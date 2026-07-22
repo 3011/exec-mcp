@@ -4,8 +4,8 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseConfig } from '../src/config.js';
-import { ExecRunner } from '../src/exec-runner.js';
+import { parseConfig } from '../dist/src/config.js';
+import { ExecRunner } from '../dist/src/exec-runner.js';
 import { remoteTestEnv } from '../scripts/helpers.js';
 
 function makeRunner(overrides = {}) {

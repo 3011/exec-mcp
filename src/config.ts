@@ -1,7 +1,44 @@
-export function parseConfig(env = process.env) {
+export interface RemoteConfig {
+  bin: string;
+  binArgs: string[];
+  host: string;
+  port: number;
+  user: string;
+  keyPath: string;
+  connectTimeoutSeconds: number;
+  strictHostKeyChecking: string;
+  knownHostsPath: string;
+}
+
+export interface ExecMcpConfig {
+  host: string;
+  port: number;
+  allowedCwds: string[];
+  defaultCwd: string;
+  defaultTimeoutSeconds: number;
+  maxTimeoutSeconds: number;
+  defaultMaxOutputBytes: number;
+  hardMaxOutputBytes: number;
+  mcpMaxRequestBytes: number;
+  fileMaxDownloadBytes: number;
+  fileMaxUploadBytes: number;
+  ringBufferBytes: number;
+  maxConcurrentExecs: number;
+  recentHistoryLimit: number;
+  registryReapGraceSeconds: number;
+  emergencyReapSeconds: number;
+  exposeRedactedCommandPreview: boolean;
+  commandPreviewMaxChars: number;
+  lifecycleLogs: boolean;
+  heartbeatSeconds: number;
+  killGraceSeconds: number;
+  remote: RemoteConfig;
+}
+
+export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig {
   const allowedCwds = (env.ALLOWED_CWDS || '/workspace,/tmp')
     .split(',')
-    .map((s) => s.trim())
+    .map((value) => value.trim())
     .filter(Boolean);
 
   return {
@@ -40,11 +77,11 @@ export function parseConfig(env = process.env) {
   };
 }
 
-function positiveInt(value, fallback) {
-  const n = Number.parseInt(String(value), 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+function positiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function splitArgs(value) {
-  return String(value).split(/\s+/).filter(Boolean);
+function splitArgs(value: string): string[] {
+  return value.split(/\s+/).filter(Boolean);
 }

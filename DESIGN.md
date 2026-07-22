@@ -20,7 +20,7 @@ exec-mcp HTTP service
 remote non-interactive /bin/sh
 ```
 
-The implementation uses Node.js core modules only. Runtime state is in memory and is lost on restart.
+The implementation is written in strict TypeScript, compiles to JavaScript for Node.js, and uses Node.js core modules only at runtime. Runtime state is in memory and is lost on restart.
 
 ## Public interfaces
 

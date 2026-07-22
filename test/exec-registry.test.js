@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ExecRegistry, ExecutionCircuitOpenError, TooManyActiveExecsError } from '../src/exec-registry.js';
+import { ExecRegistry, ExecutionCircuitOpenError, TooManyActiveExecsError } from '../dist/src/exec-registry.js';
 
 test('finalize is idempotent and writes history once', () => {
   const registry = new ExecRegistry({ maxActive: 1 });

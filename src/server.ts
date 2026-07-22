@@ -1,18 +1,93 @@
 import http from 'node:http';
+import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { parseConfig } from './config.js';
+import type { ExecMcpConfig } from './config.js';
 import { ExecRunner, ExecRejectedError, spawnRemoteShell } from './exec-runner.js';
+import type { ExecEvent, ExecSummary } from './exec-runner.js';
+import type { ExecutionRecord } from './exec-registry.js';
 
-const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 const DEFAULT_MCP_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_FILE_DOWNLOAD_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILE_UPLOAD_BYTES = 10 * 1024 * 1024;
 
+
+type UnknownRecord = Record<string, unknown>;
+type McpCancelSource = 'mcp_notification';
+
+interface McpRequestRecord {
+  requestId: unknown;
+  typedRequestId: string;
+  abortController: AbortController;
+  execId: string | null;
+  createdAt: number;
+  cancelSource: McpCancelSource | null;
+  completed: boolean;
+}
+
+interface McpContext {
+  sessionId: string;
+  signal: AbortSignal;
+  mcpRequests: McpRequestRegistry;
+  isBatch: boolean;
+}
+
+interface ToolResultEnvelope {
+  jsonrpc: '2.0';
+  id: unknown;
+  result: {
+    content: Array<{ type: 'text'; text: string }>;
+    isError: boolean;
+    structuredContent?: unknown;
+  };
+}
+
+interface RemoteFileSuccess {
+  ok: true;
+  path: string;
+  bytes: number;
+}
+
+interface RemoteDownloadSuccess extends RemoteFileSuccess {
+  data_base64: string;
+}
+
+interface ProcessCloseResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+class CodedError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'CodedError';
+    this.code = code;
+  }
+}
+
+class HttpRequestError extends Error {
+  readonly statusCode: number;
+  readonly code: string;
+
+  constructor(statusCode: number, code: string, message: string) {
+    super(message);
+    this.name = 'HttpRequestError';
+    this.statusCode = statusCode;
+    this.code = code;
+  }
+}
+
 class FileToolError extends Error {
-  constructor(code, message) {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = 'FileToolError';
     this.code = code;
@@ -20,18 +95,17 @@ class FileToolError extends Error {
 }
 
 class McpRequestRegistry {
-  constructor() { this.sessions = new Map(); }
-  register(sessionId, requestId) {
+  private readonly sessions = new Map<string, Map<string, McpRequestRecord>>();
+
+  register(sessionId: string, requestId: unknown): McpRequestRecord {
     let session = this.sessions.get(sessionId);
     if (!session) {
-      session = new Map();
+      session = new Map<string, McpRequestRecord>();
       this.sessions.set(sessionId, session);
     }
     const key = typedRequestKey(requestId);
     if (session.has(key)) {
-      const err = new Error('duplicate in-flight MCP request id');
-      err.code = 'duplicate_request_id';
-      throw err;
+      throw new CodedError('duplicate_request_id', 'duplicate in-flight MCP request id');
     }
     const record = {
       requestId,
@@ -45,28 +119,28 @@ class McpRequestRegistry {
     session.set(record.typedRequestId, record);
     return record;
   }
-  get(sessionId, requestId) { return this.sessions.get(sessionId)?.get(typedRequestKey(requestId)) || null; }
-  remove(sessionId, requestId) {
+  get(sessionId: string, requestId: unknown): McpRequestRecord | null { return this.sessions.get(sessionId)?.get(typedRequestKey(requestId)) || null; }
+  remove(sessionId: string, requestId: unknown): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     const removed = session.delete(typedRequestKey(requestId));
     if (session.size === 0) this.sessions.delete(sessionId);
     return removed;
   }
-  get size() {
+  get size(): number {
     let size = 0;
     for (const session of this.sessions.values()) size += session.size;
     return size;
   }
 }
 
-function typedRequestKey(requestId) {
+function typedRequestKey(requestId: unknown): string {
   if (typeof requestId === 'number') return `number:${requestId}`;
   if (typeof requestId === 'string') return `string:${requestId}`;
   return `${typeof requestId}:${JSON.stringify(requestId)}`;
 }
 
-export function createServer(config = parseConfig()) {
+export function createServer(config: ExecMcpConfig = parseConfig()): { server: HttpServer; runner: ExecRunner; config: ExecMcpConfig; mcpRequests: McpRequestRegistry } {
   const runner = new ExecRunner(config);
   const mcpRequests = new McpRequestRegistry();
 
@@ -97,16 +171,16 @@ export function createServer(config = parseConfig()) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'not_found' }));
     } catch (err) {
-      const status = err.statusCode || 500;
+      const status = errorStatus(err);
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: err.code || 'internal_error', message: err.message }));
+      res.end(JSON.stringify({ error: errorCode(err) || 'internal_error', message: errorMessage(err) }));
     }
   });
 
   return { server, runner, config, mcpRequests };
 }
 
-async function handleSseExec(req, res, runner) {
+async function handleSseExec(req: IncomingMessage, res: ServerResponse, runner: ExecRunner): Promise<void> {
   const body = await readJson(req, 1024 * 1024);
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
@@ -118,21 +192,21 @@ async function handleSseExec(req, res, runner) {
 
   const abortController = new AbortController();
   let finished = false;
-  const abortIfOpen = () => {
+  const abortIfOpen = (): void => {
     if (!finished && !abortController.signal.aborted) abortController.abort(new Error('http_disconnect'));
   };
-  const onResponseClose = () => {
+  const onResponseClose = (): void => {
     if (!res.writableEnded) abortIfOpen();
   };
   req.on('aborted', abortIfOpen);
   res.on('close', onResponseClose);
 
-  const emit = (event) => writeSse(res, event.type || 'message', event);
+  const emit = (event: ExecEvent): void => writeSse(res, event.type || 'message', event);
   try {
     await runner.run(body, emit, { abortSignal: abortController.signal, abortReason: 'http_disconnect', abortSource: 'http' });
   } catch (err) {
     const code = err instanceof ExecRejectedError ? err.code : 'internal_error';
-    writeSse(res, 'error', { type: 'error', code, message: err.message });
+    writeSse(res, 'error', { type: 'error', code, message: errorMessage(err) });
   } finally {
     finished = true;
     req.removeListener('aborted', abortIfOpen);
@@ -141,16 +215,16 @@ async function handleSseExec(req, res, runner) {
   }
 }
 
-async function handleMcp(req, res, runner, mcpRequests) {
+async function handleMcp(req: IncomingMessage, res: ServerResponse, runner: ExecRunner, mcpRequests: McpRequestRegistry): Promise<void> {
   const disconnectController = new AbortController();
   let disconnectHandled = false;
-  const abortForDisconnect = () => {
+  const abortForDisconnect = (): void => {
     if (disconnectHandled) return;
     disconnectHandled = true;
     disconnectController.abort(new Error('http_disconnect'));
   };
-  const onAborted = () => abortForDisconnect();
-  const onResponseClose = () => {
+  const onAborted = (): void => abortForDisconnect();
+  const onResponseClose = (): void => {
     if (!res.writableEnded) abortForDisconnect();
   };
   req.on('aborted', onAborted);
@@ -163,7 +237,7 @@ async function handleMcp(req, res, runner, mcpRequests) {
     res.setHeader('content-type', 'application/json');
     const context = { sessionId: String(sessionId), signal: disconnectController.signal, mcpRequests };
     if (Array.isArray(body)) {
-      const out = [];
+      const out: unknown[] = [];
       for (const item of body) {
         const r = await handleMcpMessage(item, runner, { ...context, isBatch: true });
         if (r) out.push(r);
@@ -185,17 +259,18 @@ async function handleMcp(req, res, runner, mcpRequests) {
   }
 }
 
-async function handleMcpMessage(msg, runner, context) {
-  if (!msg || typeof msg !== 'object') return jsonError(null, -32600, 'Invalid Request');
+async function handleMcpMessage(msg: unknown, runner: ExecRunner, context: McpContext): Promise<unknown | null> {
+  if (!isRecord(msg)) return jsonError(null, -32600, 'Invalid Request');
   const id = msg.id ?? null;
   const method = msg.method;
+  const params = isRecord(msg.params) ? msg.params : {};
 
   if (method === 'initialize') {
     return {
       jsonrpc: '2.0',
       id,
       result: {
-        protocolVersion: msg.params?.protocolVersion || '2025-11-25',
+        protocolVersion: params.protocolVersion || '2025-11-25',
         capabilities: { tools: { listChanged: true } },
         serverInfo: { name: 'exec-mcp', version: PACKAGE_VERSION }
       }
@@ -207,7 +282,7 @@ async function handleMcpMessage(msg, runner, context) {
   }
 
   if (method === 'notifications/cancelled') {
-    const record = context.mcpRequests.get(context.sessionId, msg.params?.requestId);
+    const record = context.mcpRequests.get(context.sessionId, params.requestId);
     if (record) {
       record.cancelSource = 'mcp_notification';
       record.abortController.abort(new Error('mcp_notification_cancel'));
@@ -221,12 +296,12 @@ async function handleMcpMessage(msg, runner, context) {
   }
 
   if (method === 'tools/call') {
-    const name = msg.params?.name;
-    const args = msg.params?.arguments || {};
+    const name = params.name;
+    const args: UnknownRecord = isRecord(params.arguments) ? params.arguments : {};
     try {
       if (name === 'exec') {
         if (context.isBatch) return toolResult(id, 'exec_not_supported_in_batch: Send exec as a standalone JSON-RPC request.', true);
-        const events = [];
+        const events: ExecEvent[] = [];
         const requestRecord = context.mcpRequests.register(context.sessionId, id);
         const abortFromHttp = () => requestRecord.abortController.abort(new Error('http_disconnect'));
         context.signal?.addEventListener('abort', abortFromHttp, { once: true });
@@ -236,7 +311,7 @@ async function handleMcpMessage(msg, runner, context) {
             abortSignal: requestRecord.abortController.signal,
             abortReason: requestRecord.cancelSource === 'mcp_notification' ? 'mcp_notification_cancel' : 'http_disconnect',
             abortSource: requestRecord.cancelSource || 'http',
-            onAcquire: (rec) => { requestRecord.execId = rec.id; }
+            onAcquire: (rec: ExecutionRecord) => { requestRecord.execId = rec.id; }
           });
           const text = renderToolText(summary);
           return toolResult(id, text, summary.code !== 0 || summary.timed_out === true, execStructuredContent(summary));
@@ -268,17 +343,19 @@ async function handleMcpMessage(msg, runner, context) {
       }
       return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {
-      const code = err instanceof ExecRejectedError || err instanceof FileToolError || err.code === 'duplicate_request_id' ? err.code : 'internal_error';
-      const details = { code, ...(err.details || {}) };
-      return toolResult(id, `${code}: ${err.message}`, true, details);
+      const code = err instanceof ExecRejectedError || err instanceof FileToolError || errorCode(err) === 'duplicate_request_id'
+        ? errorCode(err) || 'internal_error'
+        : 'internal_error';
+      const details = { code, ...errorDetails(err) };
+      return toolResult(id, `${code}: ${errorMessage(err)}`, true, details);
     }
   }
 
   return jsonError(id, -32601, `Method not found: ${method}`);
 }
 
-function toolResult(id, text, isError, structuredContent) {
-  const result = {
+function toolResult(id: unknown, text: string, isError: boolean, structuredContent?: unknown): ToolResultEnvelope {
+  const result: ToolResultEnvelope = {
     jsonrpc: '2.0',
     id,
     result: {
@@ -357,7 +434,7 @@ function cancelExecToolSchema() {
   };
 }
 
-function requireExecId(args) {
+function requireExecId(args: UnknownRecord): string {
   const execId = typeof args?.exec_id === 'string' ? args.exec_id.trim() : '';
   if (!execId) throw new ExecRejectedError('invalid_exec_id', 'exec_id must be a non-empty string');
   return execId;
@@ -419,11 +496,11 @@ function uploadFileToolSchema() {
   };
 }
 
-async function downloadFileTool(args, config) {
+async function downloadFileTool(args: UnknownRecord, config: ExecMcpConfig): Promise<{ path: string; bytes: number; mime_type: string; data_base64: string }> {
   const inputPath = requireInputPath(args?.path);
   const maxBytes = clampFileLimit(args?.max_bytes, config.fileMaxDownloadBytes || DEFAULT_MAX_FILE_DOWNLOAD_BYTES, 'invalid_max_bytes');
   const maxStdoutBytes = Math.ceil(maxBytes * 4 / 3) + 8192;
-  const body = await runRemoteFileScript(config, buildRemoteDownloadScript(inputPath, maxBytes, config), maxStdoutBytes);
+  const body = await runRemoteFileScript<RemoteDownloadSuccess>(config, buildRemoteDownloadScript(inputPath, maxBytes, config), maxStdoutBytes);
   return {
     path: body.path,
     bytes: body.bytes,
@@ -432,10 +509,10 @@ async function downloadFileTool(args, config) {
   };
 }
 
-async function uploadFileTool(args, config) {
+async function uploadFileTool(args: UnknownRecord, config: ExecMcpConfig): Promise<{ path: string; bytes: number; action: 'write' | 'append'; mime_type: string }> {
   const inputPath = requireInputPath(args?.path);
   const data = decodeBase64(args?.data_base64, config.fileMaxUploadBytes || DEFAULT_MAX_FILE_UPLOAD_BYTES);
-  const body = await runRemoteFileScript(
+  const body = await runRemoteFileScript<RemoteFileSuccess>(
     config,
     buildRemoteUploadScript(inputPath, data.toString('base64'), args.append === true, config),
     8192
@@ -448,7 +525,7 @@ async function uploadFileTool(args, config) {
   };
 }
 
-function execStructuredContent(summary) {
+function execStructuredContent(summary: ExecSummary): ExecSummary {
   return {
     exec_id: summary.exec_id,
     type: summary.type,
@@ -464,14 +541,14 @@ function execStructuredContent(summary) {
   };
 }
 
-function requireInputPath(inputPath) {
+function requireInputPath(inputPath: unknown): string {
   if (typeof inputPath !== 'string' || !inputPath.trim()) {
     throw new FileToolError('invalid_path', 'path must be a non-empty string');
   }
   return inputPath;
 }
 
-function clampFileLimit(value, max, errorCode) {
+function clampFileLimit(value: unknown, max: number, errorCode: string): number {
   if (value === undefined || value === null) return max;
   const n = Number.parseInt(String(value), 10);
   if (!Number.isFinite(n) || n <= 0) throw new FileToolError(errorCode, `${errorCode}: ${value}`);
@@ -479,7 +556,7 @@ function clampFileLimit(value, max, errorCode) {
   return n;
 }
 
-function decodeBase64(value, maxBytes) {
+function decodeBase64(value: unknown, maxBytes: number): Buffer {
   if (typeof value !== 'string') {
     throw new FileToolError('invalid_base64', 'data_base64 must be a string');
   }
@@ -496,23 +573,23 @@ function decodeBase64(value, maxBytes) {
   return data;
 }
 
-async function runRemoteFileScript(config, script, maxStdoutBytes) {
+async function runRemoteFileScript<T extends RemoteFileSuccess>(config: ExecMcpConfig, script: string, maxStdoutBytes: number): Promise<T> {
   let spawned;
   try {
     spawned = spawnRemoteShell(config, script);
   } catch (err) {
-    throw new FileToolError('remote_config_error', err.message);
+    throw new FileToolError('remote_config_error', errorMessage(err));
   }
 
   const { child, stdin } = spawned;
   let stdoutBytes = 0;
   let stderrBytes = 0;
-  const stdout = [];
-  const stderr = [];
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
   let outputTooLarge = false;
   let timedOut = false;
 
-  const killRemote = (signal) => {
+  const killRemote = (signal: NodeJS.Signals): void => {
     try {
       if (child.pid) process.kill(-child.pid, signal);
     } catch {
@@ -540,9 +617,9 @@ async function runRemoteFileScript(config, script, maxStdoutBytes) {
     if (stderrBytes <= 65536) stderr.push(chunk);
   });
 
-  const close = new Promise((resolve, reject) => {
+  const close = new Promise<ProcessCloseResult>((resolve, reject) => {
     child.on('error', reject);
-    child.on('close', (code, signal) => resolve({ code, signal }));
+    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => resolve({ code, signal }));
   });
   child.stdin.end(stdin);
 
@@ -556,19 +633,22 @@ async function runRemoteFileScript(config, script, maxStdoutBytes) {
     throw new FileToolError('remote_failed', errText || `remote file operation failed: exit=${code} signal=${signal || 'null'}`);
   }
 
-  let body;
+  let body: unknown;
   try {
     body = JSON.parse(Buffer.concat(stdout).toString('utf8'));
   } catch {
     throw new FileToolError('remote_protocol_error', 'remote file operation returned invalid JSON');
   }
-  if (!body || body.ok !== true) {
-    throw new FileToolError(body?.code || 'remote_failed', body?.message || 'remote file operation failed');
+  if (!isRecord(body) || body.ok !== true) {
+    throw new FileToolError(
+      isRecord(body) && typeof body.code === 'string' ? body.code : 'remote_failed',
+      isRecord(body) && typeof body.message === 'string' ? body.message : 'remote file operation failed'
+    );
   }
-  return body;
+  return body as T;
 }
 
-function buildRemoteDownloadScript(inputPath, maxBytes, config) {
+function buildRemoteDownloadScript(inputPath: string, maxBytes: number, config: ExecMcpConfig): string {
   return `python3 - <<'PY'
 import base64, json, os, stat, sys
 
@@ -624,7 +704,7 @@ PY
 `;
 }
 
-function buildRemoteUploadScript(inputPath, dataBase64, append, config) {
+function buildRemoteUploadScript(inputPath: string, dataBase64: string, append: boolean, config: ExecMcpConfig): string {
   return `python3 - <<'PY'
 import base64, binascii, errno, json, os, stat, sys
 
@@ -703,7 +783,7 @@ PY
 `;
 }
 
-function detectMimeType(filePath) {
+function detectMimeType(filePath: string): string {
   switch (extname(filePath).toLowerCase()) {
     case '.txt': return 'text/plain';
     case '.md': return 'text/markdown';
@@ -731,7 +811,7 @@ function detectMimeType(filePath) {
   }
 }
 
-function renderToolText(summary) {
+function renderToolText(summary: ExecSummary): string {
   let text = '';
   if (summary.stdout_tail) text += summary.stdout_tail;
   if (summary.stderr_tail) {
@@ -742,41 +822,36 @@ function renderToolText(summary) {
   return text ? text + meta : meta.trimStart();
 }
 
-function jsonError(id, code, message) {
+function jsonError(id: unknown, code: number, message: string): { jsonrpc: '2.0'; id: unknown; error: { code: number; message: string } } {
   return { jsonrpc: '2.0', id, error: { code, message } };
 }
 
-async function readJson(req, maxBytes) {
+async function readJson(req: IncomingMessage, maxBytes: number): Promise<unknown> {
   let size = 0;
-  const chunks = [];
+  const chunks: Buffer[] = [];
   for await (const chunk of req) {
-    size += chunk.length;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
     if (size > maxBytes) {
-      const err = new Error('request body too large');
-      err.statusCode = 413;
-      err.code = 'body_too_large';
-      throw err;
+      throw new HttpRequestError(413, 'body_too_large', 'request body too large');
     }
-    chunks.push(chunk);
+    chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
-    const err = new Error('invalid JSON body');
-    err.statusCode = 400;
-    err.code = 'invalid_json';
-    throw err;
+    throw new HttpRequestError(400, 'invalid_json', 'invalid JSON body');
   }
 }
 
-function writeSse(res, event, payload) {
+function writeSse(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function renderMetrics(runner) {
-  const lines = [];
+function renderMetrics(runner: ExecRunner): string {
+  const lines: string[] = [];
   lines.push('# HELP exec_mcp_active_execs Number of active exec calls');
   lines.push('# TYPE exec_mcp_active_execs gauge');
   lines.push(`exec_mcp_active_execs ${runner.active}`);
@@ -836,7 +911,7 @@ function renderMetrics(runner) {
   lines.push('# TYPE exec_mcp_exec_duration_seconds histogram');
   for (const [state, histogram] of runner.metrics.durationSecondsByState.entries()) {
     runner.metrics.durationSecondsBuckets.forEach((upperBound, index) => {
-      lines.push(`exec_mcp_exec_duration_seconds_bucket{final_state="${escapeLabel(state)}",le="${upperBound}"} ${histogram.buckets[index]}`);
+      lines.push(`exec_mcp_exec_duration_seconds_bucket{final_state="${escapeLabel(state)}",le="${upperBound}"} ${histogram.buckets[index] ?? 0}`);
     });
     lines.push(`exec_mcp_exec_duration_seconds_bucket{final_state="${escapeLabel(state)}",le="+Inf"} ${histogram.count}`);
     lines.push(`exec_mcp_exec_duration_seconds_sum{final_state="${escapeLabel(state)}"} ${histogram.sum}`);
@@ -852,20 +927,49 @@ function renderMetrics(runner) {
   return lines.join('\n') + '\n';
 }
 
-function escapeLabel(value) {
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+  return typeof error.code === 'string' ? error.code : undefined;
+}
+
+function errorStatus(error: unknown): number {
+  if (!isRecord(error)) return 500;
+  return typeof error.statusCode === 'number' ? error.statusCode : 500;
+}
+
+function errorDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof ExecRejectedError && error.details) return error.details;
+  return {};
+}
+
+function escapeLabel(value: unknown): string {
   return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+
+function isAddressInfo(address: string | AddressInfo | null): address is AddressInfo {
+  return address !== null && typeof address !== 'string';
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { server, runner, config } = createServer();
   server.listen(config.port, config.host, async () => {
     const address = server.address();
-    console.error(`exec-mcp listening on ${address.address}:${address.port}`);
+    if (isAddressInfo(address)) console.error(`exec-mcp listening on ${address.address}:${address.port}`);
   });
 
 
   const metricsPort = Number.parseInt(process.env.METRICS_PORT || "0", 10);
-  let metricsServer;
+  let metricsServer: HttpServer | null = null;
   if (metricsPort > 0) {
     metricsServer = http.createServer((req, res) => {
       if (req.method === "GET" && req.url === "/metrics") {
@@ -882,12 +986,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       res.end(JSON.stringify({ error: "not_found" }));
     });
     metricsServer.listen(metricsPort, config.host, () => {
-      const address = metricsServer.address();
-      console.error();
+      const address = metricsServer?.address() ?? null;
+      if (isAddressInfo(address)) console.error(`exec-mcp metrics listening on ${address.address}:${address.port}`);
     });
   }
 
-  const shutdown = async (signal) => {
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     console.error(`received ${signal}, shutting down`);
     server.close();
     if (metricsServer) metricsServer.close();

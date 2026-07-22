@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer } from '../src/server.js';
-import { parseConfig } from '../src/config.js';
+import { createServer } from '../dist/src/server.js';
+import { parseConfig } from '../dist/src/config.js';
 import { remoteTestEnv } from '../scripts/helpers.js';
 
 async function withServer(overrides, fn) {

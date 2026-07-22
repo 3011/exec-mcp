@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RingBuffer } from '../src/ring-buffer.js';
-import { redact } from '../src/redact.js';
-import { parseConfig } from '../src/config.js';
-import { ExecRunner, ExecRejectedError } from '../src/exec-runner.js';
+import { RingBuffer } from '../dist/src/ring-buffer.js';
+import { redact } from '../dist/src/redact.js';
+import { parseConfig } from '../dist/src/config.js';
+import { ExecRunner, ExecRejectedError } from '../dist/src/exec-runner.js';
 import { remoteTestEnv } from '../scripts/helpers.js';
 
 test('RingBuffer keeps only the last bytes', () => {

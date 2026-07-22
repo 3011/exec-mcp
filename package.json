@@ -4,18 +4,22 @@
   "description": "Bounded SSH remote execution and file-transfer gateway for trusted MCP clients",
   "private": true,
   "type": "module",
-  "main": "src/server.js",
+  "main": "dist/src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "test": "node --test",
-    "build": "node --check src/*.js && node --check scripts/*.js && node --check test/*.test.js",
+    "start": "node dist/src/server.js",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.js",
+    "test:compiled": "node --test test/*.test.js",
     "validate": "bash scripts/validate.sh"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {},
-  "devDependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

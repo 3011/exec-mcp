@@ -32,11 +32,11 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Syntax check
+      - name: Strict TypeScript build
         run: npm run build
 
       - name: Unit tests
-        run: npm test
+        run: npm run test:compiled
 
   docker:
     name: Docker image

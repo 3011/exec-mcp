@@ -1,12 +1,82 @@
 import { spawn } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
+import type { ExecMcpConfig } from './config.js';
 import { RingBuffer } from './ring-buffer.js';
 import { redact } from './redact.js';
 import { ExecRegistry, ExecutionCircuitOpenError, TooManyActiveExecsError } from './exec-registry.js';
+import type { AbortReason, ExecutionRecord, ExecutionState, FinalExecutionState } from './exec-registry.js';
+
+
+type UnknownRecord = Record<string, unknown>;
+type EventPayload = { type: string; [key: string]: unknown };
+export type ExecEvent = EventPayload & { exec_id: string };
+
+export interface ValidatedExecRequest {
+  command: string;
+  cwd: string;
+  timeoutSeconds: number;
+  maxOutputBytes: number;
+  env: Record<string, string>;
+  label: string | null;
+  commandSha256: string;
+  commandLength: number;
+  commandPreview: string | null;
+  allowedCwds: string[];
+  killGraceSeconds: number;
+}
+
+export interface ExecSummary {
+  exec_id: string;
+  type: 'exit';
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  duration_ms: number;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  truncated: boolean;
+  timed_out: boolean;
+  stdout_tail: string;
+  stderr_tail: string;
+}
+
+export interface RunOptions {
+  abortSignal?: AbortSignal;
+  abortReason?: AbortReason;
+  abortSource?: string;
+  onAcquire?: (record: ExecutionRecord) => void;
+}
+
+interface Histogram {
+  count: number;
+  sum: number;
+  buckets: number[];
+}
+
+export interface ExecMetrics {
+  requestsTotal: number;
+  rejectedTotal: Map<string, number>;
+  timeoutTotal: number;
+  killedTotal: Map<string, number>;
+  truncatedTotal: number;
+  streamDisconnectTotal: number;
+  exitCodeTotal: Map<string, number>;
+  outputBytesTotal: { stdout: number; stderr: number };
+  durationMsTotal: number;
+  durationSecondsBuckets: number[];
+  durationSecondsByState: Map<FinalExecutionState, Histogram>;
+  startedTotal: number;
+  abortRequestedTotal: Map<string, number>;
+  cancelRequestsTotal: Map<string, number>;
+  finishedTotal: Map<FinalExecutionState, number>;
+}
 
 export class ExecRejectedError extends Error {
-  constructor(code, message, details = undefined) {
+  readonly code: string;
+  readonly details: Record<string, unknown> | undefined;
+
+  constructor(code: string, message: string, details: Record<string, unknown> | undefined = undefined) {
     super(message);
     this.name = 'ExecRejectedError';
     this.code = code;
@@ -15,7 +85,11 @@ export class ExecRejectedError extends Error {
 }
 
 export class ExecRunner {
-  constructor(config) {
+  readonly config: ExecMcpConfig;
+  readonly registry: ExecRegistry;
+  readonly metrics: ExecMetrics;
+
+  constructor(config: ExecMcpConfig) {
     this.config = config;
     this.registry = new ExecRegistry({
       maxActive: config.maxConcurrentExecs,
@@ -30,29 +104,29 @@ export class ExecRunner {
     });
     this.metrics = {
       requestsTotal: 0,
-      rejectedTotal: new Map(),
+      rejectedTotal: new Map<string, number>(),
       timeoutTotal: 0,
-      killedTotal: new Map(),
+      killedTotal: new Map<string, number>(),
       truncatedTotal: 0,
       streamDisconnectTotal: 0,
-      exitCodeTotal: new Map(),
+      exitCodeTotal: new Map<string, number>(),
       outputBytesTotal: { stdout: 0, stderr: 0 },
       durationMsTotal: 0,
       durationSecondsBuckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800],
-      durationSecondsByState: new Map(),
+      durationSecondsByState: new Map<FinalExecutionState, Histogram>(),
       startedTotal: 0,
-      abortRequestedTotal: new Map(),
-      cancelRequestsTotal: new Map(),
-      finishedTotal: new Map()
+      abortRequestedTotal: new Map<string, number>(),
+      cancelRequestsTotal: new Map<string, number>(),
+      finishedTotal: new Map<FinalExecutionState, number>()
     };
   }
 
-  get active() {
+  get active(): number {
     return this.registry.activeCount;
   }
 
-  validate(input) {
-    const req = input && typeof input === 'object' ? input : {};
+  validate(input: unknown): ValidatedExecRequest {
+    const req: UnknownRecord = isRecord(input) ? input : {};
     const command = typeof req.command === 'string' ? req.command.trim() : '';
     if (!command) throw new ExecRejectedError('invalid_command', 'command must be a non-empty string');
 
@@ -82,7 +156,7 @@ export class ExecRunner {
       'output_limit_too_large'
     );
 
-    const env = {};
+    const env: Record<string, string> = {};
     if (req.env && typeof req.env === 'object' && !Array.isArray(req.env)) {
       for (const [key, value] of Object.entries(req.env)) {
         if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) env[key] = String(value);
@@ -104,12 +178,12 @@ export class ExecRunner {
     };
   }
 
-  async run(input, emit, options = {}) {
+  async run(input: unknown, emit: (event: ExecEvent) => void, options: RunOptions = {}): Promise<ExecSummary> {
     this.metrics.requestsTotal++;
 
     throwIfAborted(options.abortSignal);
 
-    let req;
+    let req: ValidatedExecRequest;
     try {
       req = this.validate(input);
     } catch (err) {
@@ -117,7 +191,7 @@ export class ExecRunner {
       throw err;
     }
 
-    let rec;
+    let rec: ExecutionRecord;
     try {
       rec = this.registry.acquire({
         timeoutMs: req.timeoutSeconds * 1000,
@@ -146,23 +220,23 @@ export class ExecRunner {
     let forwardedBytes = 0;
     let truncated = false;
     let timedOut = false;
-    let killedSignal = null;
+    let killedSignal: NodeJS.Signals | null = null;
     let childExited = false;
     let timeoutCounted = false;
     let disconnectCounted = false;
-    let heartbeat = null;
-    let sigkillTimer = null;
+    let heartbeat: NodeJS.Timeout | null = null;
+    let sigkillTimer: NodeJS.Timeout | null = null;
     const startedAt = new Date(rec.createdAt);
     const tailBufferBytes = Math.min(this.config.ringBufferBytes, req.maxOutputBytes);
     const stdoutTail = new RingBuffer(tailBufferBytes);
     const stderrTail = new RingBuffer(tailBufferBytes);
 
-    const send = (event) => emit({ exec_id: execId, ...event });
+    const send = (event: EventPayload): void => emit({ exec_id: execId, ...event });
 
-    let child;
-    let finalSummary = null;
+    let child: ChildProcessWithoutNullStreams | undefined;
+    let finalSummary: ExecSummary | null = null;
     let spawnFailed = false;
-    const killGroup = (signal) => {
+    const killGroup = (signal: NodeJS.Signals): void => {
       if (childExited || !child?.pid) return;
       killedSignal = signal;
       try {
@@ -173,7 +247,7 @@ export class ExecRunner {
       }
     };
 
-    const scheduleSigkill = (delaySeconds = this.config.killGraceSeconds, action = 'sigkill') => {
+    const scheduleSigkill = (delaySeconds = this.config.killGraceSeconds, action = 'sigkill'): void => {
       if (sigkillTimer) return;
       sigkillTimer = setTimeout(() => {
         if (!childExited) {
@@ -185,7 +259,7 @@ export class ExecRunner {
       sigkillTimer.unref?.();
     };
 
-    const onRegistryAbort = () => {
+    const onRegistryAbort = (): void => {
       const reasonCode = abortReasonCode(rec.controller.signal.reason);
       this.bumpMap(this.metrics.abortRequestedTotal, reasonCode);
       this.logLifecycle(rec.state, rec.id, { abort_source: rec.abortSource, transport_pid: rec.transportPid });
@@ -208,10 +282,10 @@ export class ExecRunner {
     };
 
     const clientAbortSignal = options.abortSignal;
-    const onClientAbort = () => {
+    const onClientAbort = (): void => {
       const signalReason = abortReasonCode(clientAbortSignal?.reason);
-      const reason = signalReason === 'mcp_notification_cancel' ? signalReason : (options.abortReason || 'http_disconnect');
-      const source = reason === 'mcp_notification_cancel' ? 'mcp_notification' : (options.abortSource || 'http');
+      const reason: AbortReason = signalReason === 'mcp_notification_cancel' ? signalReason : (options.abortReason || 'http_disconnect');
+      const source: string = reason === 'mcp_notification_cancel' ? 'mcp_notification' : (options.abortSource || 'http');
       this.registry.requestAbort(rec.id, reason, source);
     };
 
@@ -234,7 +308,7 @@ export class ExecRunner {
       this.logLifecycle('running', rec.id, { label: rec.label, transport_pid: child.pid });
       send({ type: 'start', transport_pid: child.pid, started_at: startedAt.toISOString(), cwd: req.cwd });
 
-      const maybeForward = (stream, chunk) => {
+      const maybeForward = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
         const len = chunk.length;
         if (stream === 'stdout') {
           stdoutBytes += len;
@@ -273,10 +347,11 @@ export class ExecRunner {
       }, this.config.heartbeatSeconds * 1000);
       heartbeat.unref?.();
 
-      finalSummary = await new Promise((resolveRun) => {
+      const runningChild = child;
+      finalSummary = await new Promise<ExecSummary>((resolveRun) => {
         let finished = false;
 
-        const finish = (code, signal) => {
+        const finish = (code: number | null, signal: NodeJS.Signals | null): void => {
           if (finished) return;
           finished = true;
           childExited = true;
@@ -286,7 +361,7 @@ export class ExecRunner {
           this.bumpMap(this.metrics.exitCodeTotal, String(code ?? signal ?? 'null'));
 
           const tails = boundedRedactedTails(stdoutTail.toString(), stderrTail.toString(), req.maxOutputBytes);
-          const summary = {
+          const summary: Omit<ExecSummary, 'exec_id'> = {
             type: 'exit',
             code,
             signal: signal || killedSignal,
@@ -302,16 +377,16 @@ export class ExecRunner {
           resolveRun({ exec_id: execId, ...summary });
         };
 
-        child.on('error', (err) => {
+        runningChild.on('error', (err) => {
           spawnFailed = true;
           send({ type: 'error', code: 'spawn_failed', message: err.message });
         });
 
-        child.on('exit', () => {
+        runningChild.on('exit', () => {
           childExited = true;
         });
 
-        child.on('close', finish);
+        runningChild.on('close', finish);
       });
       return finalSummary;
     } catch (err) {
@@ -320,15 +395,15 @@ export class ExecRunner {
         this.bumpRejected('spawn_failed');
       }
       if (err instanceof ExecRejectedError) throw err;
-      throw new ExecRejectedError('spawn_failed', err.message);
+      throw new ExecRejectedError('spawn_failed', errorMessage(err));
     } finally {
       if (heartbeat) clearInterval(heartbeat);
       if (sigkillTimer) clearTimeout(sigkillTimer);
       rec.controller.signal.removeEventListener('abort', onRegistryAbort);
       clientAbortSignal?.removeEventListener('abort', onClientAbort);
       const finalized = this.registry.finalize(rec.id, {
-        exitCode: finalSummary?.code,
-        signal: finalSummary?.signal,
+        exitCode: finalSummary?.code ?? null,
+        signal: finalSummary?.signal ?? null,
         transportExitConfirmed: childExited,
         spawnFailed
       });
@@ -352,20 +427,20 @@ export class ExecRunner {
     return { active: this.active, max_concurrent: this.registry.maxActive, circuit_open: this.registry.circuitOpen, tasks: this.registry.listActive() };
   }
 
-  getStatus(execId) { return this.registry.status(execId); }
+  getStatus(execId: string) { return this.registry.status(execId); }
 
-  cancel(execId) {
+  cancel(execId: string) {
     const result = this.registry.requestCancel(execId);
     this.bumpMap(this.metrics.cancelRequestsTotal, result.result);
     return result;
   }
 
-  logLifecycle(state, execId, fields = {}) {
+  logLifecycle(state: ExecutionState | FinalExecutionState, execId: string | undefined, fields: Record<string, unknown> = {}): void {
     if (this.config.lifecycleLogs === false) return;
     console.error(`exec_state_change ${JSON.stringify({ exec_id: execId, state, ...fields })}`);
   }
 
-  observeDuration(finalState, durationMs) {
+  observeDuration(finalState: FinalExecutionState, durationMs: number): void {
     if (!Number.isFinite(durationMs) || durationMs < 0) return;
     const seconds = durationMs / 1000;
     let histogram = this.metrics.durationSecondsByState.get(finalState);
@@ -376,28 +451,28 @@ export class ExecRunner {
     histogram.count++;
     histogram.sum += seconds;
     this.metrics.durationSecondsBuckets.forEach((upperBound, index) => {
-      if (seconds <= upperBound) histogram.buckets[index]++;
+      if (seconds <= upperBound) histogram.buckets[index] = (histogram.buckets[index] ?? 0) + 1;
     });
   }
 
-  bumpRejected(reason) {
+  bumpRejected(reason: string): void {
     this.bumpMap(this.metrics.rejectedTotal, reason);
   }
 
-  bumpMap(map, key) {
+  bumpMap<K extends string>(map: Map<K, number>, key: K): void {
     map.set(key, (map.get(key) || 0) + 1);
   }
 }
-function abortReasonCode(reason) {
+function abortReasonCode(reason: unknown): string {
   if (reason instanceof Error && reason.message) return reason.message;
   return String(reason || 'aborted');
 }
 
-function spawnCommand(config, req) {
+function spawnCommand(config: ExecMcpConfig, req: ValidatedExecRequest): { child: ChildProcessWithoutNullStreams; stdin: string } {
   return spawnRemoteShell(config, buildRemoteScript(req));
 }
 
-export function spawnRemoteShell(config, stdin) {
+export function spawnRemoteShell(config: ExecMcpConfig, stdin: string): { child: ChildProcessWithoutNullStreams; stdin: string } {
   if (!config.remote.host || !config.remote.keyPath) {
     throw new Error('remote execution requires REMOTE_HOST and REMOTE_KEY_PATH');
   }
@@ -423,8 +498,8 @@ export function spawnRemoteShell(config, stdin) {
   return { child, stdin };
 }
 
-function buildRemoteScript(req) {
-  const lines = [];
+function buildRemoteScript(req: ValidatedExecRequest): string {
+  const lines: string[] = [];
   lines.push('set -eu');
   lines.push(`CWD_B64='${b64(req.cwd)}'`);
   lines.push(`CMD_B64='${b64(req.command)}'`);
@@ -505,22 +580,22 @@ function buildRemoteScript(req) {
   return lines.join('\n') + '\n';
 }
 
-function b64(value) {
+function b64(value: unknown): string {
   return Buffer.from(String(value), 'utf8').toString('base64');
 }
 
-function sanitizedEnv(extraEnv) {
+function sanitizedEnv(extraEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extraEnv };
   delete env.ENV;
   delete env.BASH_ENV;
   return env;
 }
 
-function boundedRedactedTails(stdoutRaw, stderrRaw, maxBytes) {
+function boundedRedactedTails(stdoutRaw: string, stderrRaw: string, maxBytes: number): { stdout_tail: string; stderr_tail: string } {
   return boundTailPair(redact(stdoutRaw), redact(stderrRaw), maxBytes);
 }
 
-function boundTailPair(stdout, stderr, maxBytes) {
+function boundTailPair(stdout: string, stderr: string, maxBytes: number): { stdout_tail: string; stderr_tail: string } {
   const limit = Math.max(0, Number.parseInt(String(maxBytes), 10) || 0);
   if (limit === 0) return { stdout_tail: '', stderr_tail: '' };
 
@@ -554,7 +629,7 @@ function boundTailPair(stdout, stderr, maxBytes) {
   };
 }
 
-function trimUtf8Tail(value, maxBytes) {
+function trimUtf8Tail(value: string, maxBytes: number): string {
   if (maxBytes <= 0) return '';
   const buf = Buffer.from(value, 'utf8');
   if (buf.length <= maxBytes) return value;
@@ -565,7 +640,7 @@ function trimUtf8Tail(value, maxBytes) {
   return text;
 }
 
-function clampInt(value, fallback, min, max, lowErrorCode, highErrorCode) {
+function clampInt(value: unknown, fallback: number, min: number, max: number, lowErrorCode: string, highErrorCode: string): number {
   if (value === undefined || value === null) return fallback;
   const n = Number(value);
   if (!Number.isInteger(n) || n < min) throw new ExecRejectedError(lowErrorCode, `${lowErrorCode}: ${value}`);
@@ -573,13 +648,13 @@ function clampInt(value, fallback, min, max, lowErrorCode, highErrorCode) {
   return n;
 }
 
-function throwIfAborted(signal) {
+function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   const reason = signal.reason instanceof Error ? signal.reason.message : String(signal.reason || 'request_cancelled');
   throw new ExecRejectedError('request_cancelled', reason);
 }
 
-function sanitizeLabel(value) {
+function sanitizeLabel(value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string') throw new ExecRejectedError('invalid_label', 'label must be a string');
   const clean = redact(value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim());
@@ -587,12 +662,20 @@ function sanitizeLabel(value) {
   return clean || null;
 }
 
-function sanitizePreview(value, maxChars) {
+function sanitizePreview(value: unknown, maxChars: number): string {
   const clean = String(value).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
   return clean.slice(0, maxChars);
 }
 
-function isAllowedCwd(cwd, allowedCwds) {
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isAllowedCwd(cwd: string, allowedCwds: readonly string[]): boolean {
   const normalized = resolve(cwd);
   return allowedCwds.some((base) => {
     const resolvedBase = resolve(base);

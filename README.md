@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/3011/exec-mcp)](https://github.com/3011/exec-mcp/releases)
 [![License](https://img.shields.io/github/license/3011/exec-mcp)](LICENSE)
 
-A dependency-free Node.js gateway that gives trusted MCP clients bounded remote command execution and file transfer over SSH.
+A strict TypeScript Node.js gateway with no runtime npm dependencies that gives trusted MCP clients bounded remote command execution and file transfer over SSH.
 
 `exec-mcp` deliberately stays small: it validates paths and resource limits, runs a non-interactive remote shell, streams or returns bounded output, and exposes execution lifecycle controls. Higher-level behavior remains in tools already installed on the remote host.
 
@@ -23,6 +23,7 @@ A dependency-free Node.js gateway that gives trusted MCP clients bounded remote 
 - Secret-pattern redaction for streamed output and retained tails.
 - Prometheus-compatible metrics and health endpoints.
 - Execution-capacity gauges and duration histograms for latency percentiles.
+- Strict TypeScript source compiled to JavaScript for production.
 - No runtime npm dependencies.
 
 ## MCP tools
@@ -169,8 +170,8 @@ For all lifecycle and circuit-breaker settings, see [DESIGN.md](DESIGN.md).
 
 ```bash
 npm test          # 53 tests
-npm run build     # syntax checks
-npm run validate  # tests, syntax checks, and local HTTP/SSE smoke test
+npm run build     # strict type-check and compile to dist/
+npm run validate  # strict build, tests, and local HTTP/SSE smoke test
 ```
 
 CI runs the test suite and builds the container. CodeQL and Dependabot configuration are included in the repository.

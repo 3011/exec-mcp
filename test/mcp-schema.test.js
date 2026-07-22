@@ -5,8 +5,8 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { Buffer } from 'node:buffer';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createServer } from '../src/server.js';
-import { parseConfig } from '../src/config.js';
+import { createServer } from '../dist/src/server.js';
+import { parseConfig } from '../dist/src/config.js';
 import { remoteTestEnv } from '../scripts/helpers.js';
 
 test('MCP exec tool schema includes operational context', async () => {
