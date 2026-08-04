@@ -9,6 +9,7 @@ import { ExecRunner, ExecRejectedError } from './exec-runner.js';
 import type { ExecEvent } from './exec-runner.js';
 import { renderMetrics } from './metrics.js';
 import { handleMcpMessage, McpRequestRegistry } from './mcp-handler.js';
+import { ArtifactTransferManager } from './artifact-transfer.js';
 
 const DEFAULT_MCP_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 
@@ -28,9 +29,10 @@ class HttpRequestError extends Error {
   }
 }
 
-export function createServer(config: ExecMcpConfig = parseConfig()): { server: HttpServer; runner: ExecRunner; config: ExecMcpConfig; mcpRequests: McpRequestRegistry } {
+export function createServer(config: ExecMcpConfig = parseConfig()): { server: HttpServer; runner: ExecRunner; config: ExecMcpConfig; mcpRequests: McpRequestRegistry; artifacts: ArtifactTransferManager } {
   const runner = new ExecRunner(config);
   const mcpRequests = new McpRequestRegistry();
+  const artifacts = new ArtifactTransferManager(config);
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -52,9 +54,11 @@ export function createServer(config: ExecMcpConfig = parseConfig()): { server: H
       }
 
       if (req.method === 'POST' && req.url === '/mcp') {
-        await handleMcp(req, res, runner, mcpRequests);
+        await handleMcp(req, res, runner, artifacts, mcpRequests);
         return;
       }
+
+      if (await artifacts.handleHttp(req, res)) return;
 
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'not_found' }));
@@ -65,7 +69,8 @@ export function createServer(config: ExecMcpConfig = parseConfig()): { server: H
     }
   });
 
-  return { server, runner, config, mcpRequests };
+  server.on('close', () => artifacts.close());
+  return { server, runner, config, mcpRequests, artifacts };
 }
 
 async function handleSseExec(req: IncomingMessage, res: ServerResponse, runner: ExecRunner): Promise<void> {
@@ -103,7 +108,7 @@ async function handleSseExec(req: IncomingMessage, res: ServerResponse, runner: 
   }
 }
 
-async function handleMcp(req: IncomingMessage, res: ServerResponse, runner: ExecRunner, mcpRequests: McpRequestRegistry): Promise<void> {
+async function handleMcp(req: IncomingMessage, res: ServerResponse, runner: ExecRunner, artifacts: ArtifactTransferManager, mcpRequests: McpRequestRegistry): Promise<void> {
   const disconnectController = new AbortController();
   let disconnectHandled = false;
   const abortForDisconnect = (): void => {
@@ -127,14 +132,14 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse, runner: Exec
     if (Array.isArray(body)) {
       const out: unknown[] = [];
       for (const item of body) {
-        const r = await handleMcpMessage(item, runner, { ...context, isBatch: true });
+        const r = await handleMcpMessage(item, runner, artifacts, { ...context, isBatch: true });
         if (r) out.push(r);
       }
       res.end(JSON.stringify(out));
       return;
     }
 
-    const response = await handleMcpMessage(body, runner, { ...context, isBatch: false });
+    const response = await handleMcpMessage(body, runner, artifacts, { ...context, isBatch: false });
     if (!response) {
       res.statusCode = 202;
       res.end('{}');

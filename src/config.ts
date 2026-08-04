@@ -22,6 +22,15 @@ export interface ExecMcpConfig {
   mcpMaxRequestBytes: number;
   fileMaxDownloadBytes: number;
   fileMaxUploadBytes: number;
+  artifactMaxBytes: number;
+  artifactMaxConcurrentTransfers: number;
+  artifactSpoolDir: string;
+  artifactPublicBaseUrl: string;
+  artifactDownloadTtlSeconds: number;
+  artifactMaxDownloads: number;
+  artifactTransferTimeoutSeconds: number;
+  artifactImportAllowHttp: boolean;
+  artifactImportAllowedHosts: string[];
   ringBufferBytes: number;
   maxConcurrentExecs: number;
   recentHistoryLimit: number;
@@ -53,6 +62,15 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     mcpMaxRequestBytes: positiveInt(env.MCP_MAX_REQUEST_BYTES, 16 * 1024 * 1024),
     fileMaxDownloadBytes: positiveInt(env.FILE_MAX_DOWNLOAD_BYTES, 10 * 1024 * 1024),
     fileMaxUploadBytes: positiveInt(env.FILE_MAX_UPLOAD_BYTES, 10 * 1024 * 1024),
+    artifactMaxBytes: positiveInt(env.ARTIFACT_MAX_BYTES, 256 * 1024 * 1024),
+    artifactMaxConcurrentTransfers: positiveInt(env.ARTIFACT_MAX_CONCURRENT_TRANSFERS, 2),
+    artifactSpoolDir: env.ARTIFACT_SPOOL_DIR || '/tmp/exec-mcp-artifacts',
+    artifactPublicBaseUrl: String(env.ARTIFACT_PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
+    artifactDownloadTtlSeconds: positiveInt(env.ARTIFACT_DOWNLOAD_TTL_SECONDS, 900),
+    artifactMaxDownloads: positiveInt(env.ARTIFACT_MAX_DOWNLOADS, 5),
+    artifactTransferTimeoutSeconds: positiveInt(env.ARTIFACT_TRANSFER_TIMEOUT_SECONDS, 600),
+    artifactImportAllowHttp: String(env.ARTIFACT_IMPORT_ALLOW_HTTP || 'false').toLowerCase() === 'true',
+    artifactImportAllowedHosts: splitCsv(env.ARTIFACT_IMPORT_ALLOWED_HOSTS || ''),
     ringBufferBytes: positiveInt(env.RING_BUFFER_BYTES, 65536),
     maxConcurrentExecs: positiveInt(env.MAX_CONCURRENT_EXECS, 2),
     recentHistoryLimit: positiveInt(env.RECENT_EXEC_HISTORY_LIMIT, 100),
@@ -84,4 +102,8 @@ function positiveInt(value: string | undefined, fallback: number): number {
 
 function splitArgs(value: string): string[] {
   return value.split(/\s+/).filter(Boolean);
+}
+
+function splitCsv(value: string): string[] {
+  return value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
 }

@@ -4,6 +4,7 @@ import type { ExecEvent, ExecSummary } from './exec-runner.js';
 import type { ExecutionRecord } from './exec-registry.js';
 import { TOOL_SCHEMAS } from './tool-schemas.js';
 import { downloadFileTool, FileToolError, uploadFileTool } from './file-tools.js';
+import { ArtifactTransferError, ArtifactTransferManager } from './artifact-transfer.js';
 
 const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
@@ -27,11 +28,15 @@ interface McpContext {
   isBatch: boolean;
 }
 
+type ToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'resource_link'; uri: string; name: string; description?: string; mimeType?: string; size?: number; annotations?: { audience?: string[]; priority?: number } };
+
 interface ToolResultEnvelope {
   jsonrpc: '2.0';
   id: unknown;
   result: {
-    content: Array<{ type: 'text'; text: string }>;
+    content: ToolContent[];
     isError: boolean;
     structuredContent?: unknown;
   };
@@ -93,7 +98,7 @@ function typedRequestKey(requestId: unknown): string {
   return `${typeof requestId}:${JSON.stringify(requestId)}`;
 }
 
-export async function handleMcpMessage(msg: unknown, runner: ExecRunner, context: McpContext): Promise<unknown | null> {
+export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifacts: ArtifactTransferManager, context: McpContext): Promise<unknown | null> {
   if (!isRecord(msg)) return jsonError(null, -32600, 'Invalid Request');
   const id = msg.id ?? null;
   const method = msg.method;
@@ -175,9 +180,28 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, context
         const result = await uploadFileTool(args, runner.config);
         return toolResult(id, JSON.stringify(result, null, 2), false, result);
       }
+      if (name === 'import_chatgpt_file') {
+        const result = await artifacts.importChatgptFile(args, context.signal);
+        return toolResult(id, JSON.stringify(result, null, 2), false, result);
+      }
+      if (name === 'export_remote_file') {
+        const result = await artifacts.exportRemoteFile(args, context.signal);
+        return toolResultWithContent(id, [
+          { type: 'text', text: JSON.stringify(result, null, 2) },
+          {
+            type: 'resource_link',
+            uri: result.download_url,
+            name: result.file_name,
+            description: `Verified remote file export (${result.bytes} bytes, sha256 ${result.sha256})`,
+            mimeType: result.mime_type,
+            size: result.bytes,
+            annotations: { audience: ['user', 'assistant'], priority: 1 }
+          }
+        ], false, result);
+      }
       return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {
-      const code = err instanceof ExecRejectedError || err instanceof FileToolError || errorCode(err) === 'duplicate_request_id'
+      const code = err instanceof ExecRejectedError || err instanceof FileToolError || err instanceof ArtifactTransferError || errorCode(err) === 'duplicate_request_id'
         ? errorCode(err) || 'internal_error'
         : 'internal_error';
       const details = { code, ...errorDetails(err) };
@@ -189,13 +213,14 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, context
 }
 
 function toolResult(id: unknown, text: string, isError: boolean, structuredContent?: unknown): ToolResultEnvelope {
+  return toolResultWithContent(id, [{ type: 'text', text }], isError, structuredContent);
+}
+
+function toolResultWithContent(id: unknown, content: ToolContent[], isError: boolean, structuredContent?: unknown): ToolResultEnvelope {
   const result: ToolResultEnvelope = {
     jsonrpc: '2.0',
     id,
-    result: {
-      content: [{ type: 'text', text }],
-      isError
-    }
+    result: { content, isError }
   };
   if (structuredContent !== undefined) {
     result.result.structuredContent = structuredContent;

@@ -11,7 +11,8 @@ The intended deployment is a trusted, single-tenant MCP connection. Multi-tenant
 - Integrity and availability of the remote host.
 - Confidentiality of the SSH private key and remote files.
 - Confidentiality of command output and operational metadata.
-- Integrity of uploaded files and executed commands.
+- Integrity of uploaded and exported files and executed commands.
+- Confidentiality of short-lived artifact capability URLs.
 - Availability of gateway execution capacity.
 - Integrity of the pinned remote SSH host identity.
 
@@ -20,6 +21,10 @@ The intended deployment is a trusted, single-tenant MCP connection. Multi-tenant
 ### Client to gateway
 
 The gateway accepts arbitrary shell commands and operator-wide lifecycle controls. There is no built-in authentication, authorization, or TLS. An external authenticated transport, reverse proxy, or private network boundary is mandatory.
+
+### Public artifact data plane
+
+When `export_remote_file` is enabled, only `/artifacts/<256-bit-token>/...` is intentionally reachable through a public HTTPS ingress. The MCP, exec, metrics, and health routes remain private. The random URL is a temporary bearer capability and must not be logged, indexed, or forwarded to untrusted parties.
 
 ### Gateway to remote host
 
@@ -94,13 +99,15 @@ The gateway authenticates with an SSH key and trusts the server identity establi
 
 **Residual risk:** redaction cannot recognize every secret format. Avoid printing secrets and keep lifecycle logs protected.
 
-### Malicious file upload or download
+### Malicious file import, export, or download
 
-**Impact:** overwrite, exfiltration, disk consumption, or unsafe downstream processing.
+**Impact:** overwrite, exfiltration, SSRF, disk consumption, capability-link leakage, or unsafe downstream processing.
 
-**Controls:** trusted callers only; path allowlist and realpath checks; existing-parent requirement; regular-file download requirement; decoded-size limits; bounded remote protocol output.
+**Controls:** trusted callers only; optional import-host allowlist; HTTPS-only import by default; redirect revalidation; path allowlist and realpath checks; same-directory temporary files; symlink rejection; regular-file export requirement; size, concurrency, and timeout limits; SHA-256 verification; atomic commit; 256-bit export tokens; short TTL; bounded GET count; `Cache-Control: no-store`; and a public ingress restricted to `/artifacts/`.
 
-**Residual risk:** the gateway does not inspect file content or prevent overwriting an allowed file. Remote permissions and caller authorization must enforce policy.
+Identical import retries are idempotent. Different bytes cannot replace an existing destination unless the caller explicitly sets `overwrite=true`.
+
+**Residual risk:** an empty `ARTIFACT_IMPORT_ALLOWED_HOSTS` permits any HTTPS source in the trusted single-tenant model and can be abused for SSRF by a compromised trusted client. Set a narrow host suffix such as `.oaiusercontent.com` after validating the current ChatGPT file host. Capability URLs are bearer secrets until they expire. The gateway does not inspect file content, so downstream consumers must handle untrusted formats safely.
 
 ### Cross-tenant execution control
 
@@ -116,7 +123,9 @@ The gateway authenticates with an SSH key and trusts the server identity establi
 
 ## Deployment checklist
 
-- [ ] The service is not directly internet-accessible.
+- [ ] `/mcp`, `/exec`, `/metrics`, and `/healthz` are not directly internet-accessible.
+- [ ] If artifact export is enabled, the public ingress routes only `/artifacts/` and uses valid HTTPS.
+- [ ] Artifact capability URLs are excluded from access logs where possible and are never emitted in lifecycle logs.
 - [ ] Authentication and encrypted transport exist before the gateway.
 - [ ] Network access is restricted to intended clients.
 - [ ] The SSH user is dedicated and non-root where possible.

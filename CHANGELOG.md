@@ -4,10 +4,28 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-04
+
 ### Added
 
+- `import_chatgpt_file` with ChatGPT `openai/fileParams` binding, bounded HTTPS download, SHA-256 verification, binary SSH streaming, and atomic remote commit.
+- `export_remote_file` with raw SSH streaming, verified local spool, ChatGPT tool-result file references, and MCP HTTPS resource links.
+- Short-lived 256-bit artifact capability URLs with download-count limits, HEAD, byte ranges, digest headers, and immutable file metadata.
+- Artifact size, concurrency, timeout, host-allowlist, spool, and public-origin configuration.
+- Random-binary end-to-end tests for both directions, idempotent retries, conflicting content, checksum rejection, and HTTP download behavior.
 - Prometheus execution-duration histogram grouped by final state.
 - Maximum-concurrency gauge and lifecycle-log duration metadata for operational dashboards.
+
+### Changed
+
+- Retained base64 `upload_file` and `download_file` as small-file compatibility tools rather than the primary artifact path.
+- Generalized SSH process spawning so binary stdin/stdout transfers preserve backpressure.
+
+### Security
+
+- Remote artifact writes now use same-directory temporary files, fsync, SHA-256 validation, and atomic commit.
+- Identical retries are idempotent; existing files with different content require explicit overwrite.
+- Documented the separate public `/artifacts/` data-plane boundary required when Secure MCP Tunnel keeps MCP JSON-RPC private.
 
 ## [0.3.0] - 2026-07-18
 
@@ -35,5 +53,6 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - Defaulted SSH host-key checking to strict mode and neutral secret paths.
 - Removed a tracked deployment-specific `known_hosts` file.
 
-[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/3011/exec-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/3011/exec-mcp/releases/tag/v0.3.0

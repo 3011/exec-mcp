@@ -119,11 +119,127 @@ function uploadFileToolSchema() {
   };
 }
 
+
+function openAIFileSchema() {
+  return {
+    type: 'object',
+    properties: {
+      download_url: { type: 'string', description: 'Temporary HTTPS download URL supplied by ChatGPT.' },
+      file_id: { type: 'string', description: 'ChatGPT file identifier supplied by the host.' },
+      mime_type: { type: 'string', description: 'Optional MIME type supplied by ChatGPT.' },
+      file_name: { type: 'string', description: 'Optional original file name supplied by ChatGPT.' }
+    },
+    required: ['download_url', 'file_id'],
+    additionalProperties: false
+  };
+}
+
+function importChatgptFileToolSchema() {
+  return {
+    name: 'import_chatgpt_file',
+    title: 'Import ChatGPT file',
+    description: 'Reliably import a file attached to or generated in the current ChatGPT session into the configured remote environment. ChatGPT supplies a temporary file reference; exec-mcp downloads the binary bytes, computes SHA-256, streams them over SSH, verifies the remote copy, and atomically commits the target file. Use this instead of upload_file for documents, presentations, archives, images, and other non-trivial binary files.',
+    inputSchema: {
+      type: 'object',
+      $defs: { OpenAIFile: openAIFileSchema() },
+      properties: {
+        file: { $ref: '#/$defs/OpenAIFile' },
+        target_path: { type: 'string', description: 'Destination file path in the remote environment. Relative paths resolve from DEFAULT_CWD and the final path must remain under ALLOWED_CWDS.' },
+        expected_sha256: { type: 'string', pattern: '^[a-fA-F0-9]{64}$', description: 'Optional expected SHA-256 for an additional end-to-end integrity check.' },
+        overwrite: { type: 'boolean', default: false, description: 'Replace an existing regular file only when true. The replacement is committed atomically.' }
+      },
+      required: ['file', 'target_path'],
+      additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        bytes: { type: 'integer', minimum: 0 },
+        sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+        mime_type: { type: 'string' },
+        source_file_id: { type: 'string' },
+        source_file_name: { type: 'string' },
+        verified: { type: 'boolean', enum: [true] }
+      },
+      required: ['path', 'bytes', 'sha256', 'mime_type', 'source_file_id', 'source_file_name', 'verified'],
+      additionalProperties: false
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true
+    },
+    _meta: {
+      'openai/fileParams': ['file'],
+      'openai/toolInvocation/invoking': 'Importing file to remote environment',
+      'openai/toolInvocation/invoked': 'File imported and verified'
+    }
+  };
+}
+
+function exportRemoteFileToolSchema() {
+  return {
+    name: 'export_remote_file',
+    title: 'Export remote file',
+    description: 'Reliably export one allowed remote file to the current ChatGPT session or user as a short-lived HTTPS resource link. The file is streamed over SSH without base64, bounded by ARTIFACT_MAX_BYTES, hashed with SHA-256, cached immutably for a limited time, and returned as an MCP resource_link. Use this instead of download_file for documents, presentations, archives, images, and other non-trivial binary files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Remote file path to export. Relative paths resolve from DEFAULT_CWD and the real path must remain under ALLOWED_CWDS.' },
+        file_name: { type: 'string', description: 'Optional download file name. Defaults to the remote basename.' },
+        max_bytes: { type: 'integer', minimum: 1, description: 'Optional per-call size limit, not greater than ARTIFACT_MAX_BYTES.' }
+      },
+      required: ['path'],
+      additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        bytes: { type: 'integer', minimum: 0 },
+        sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+        mime_type: { type: 'string' },
+        file_name: { type: 'string' },
+        download_url: { type: 'string' },
+        expires_at: { type: 'string' },
+        downloads_remaining: { type: 'integer', minimum: 0 },
+        file_uri: {
+          type: 'object',
+          properties: {
+            download_url: { type: 'string' },
+            file_id: { type: 'string' },
+            mime_type: { type: 'string' },
+            file_name: { type: 'string' }
+          },
+          required: ['download_url', 'file_id', 'mime_type', 'file_name'],
+          additionalProperties: false
+        }
+      },
+      required: ['path', 'bytes', 'sha256', 'mime_type', 'file_name', 'download_url', 'expires_at', 'downloads_remaining', 'file_uri'],
+      additionalProperties: false
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false
+    },
+    _meta: {
+      'openai/toolInvocation/invoking': 'Exporting remote file',
+      'openai/toolInvocation/invoked': 'Remote file ready'
+    }
+  };
+}
+
 export const TOOL_SCHEMAS = [
   execToolSchema(),
   listActiveExecsToolSchema(),
   getExecStatusToolSchema(),
   cancelExecToolSchema(),
   downloadFileToolSchema(),
-  uploadFileToolSchema()
+  uploadFileToolSchema(),
+  importChatgptFileToolSchema(),
+  exportRemoteFileToolSchema()
 ];

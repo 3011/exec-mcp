@@ -27,7 +27,8 @@ The source is split by responsibility without adding runtime frameworks:
 - `server.ts` composes dependencies and owns HTTP/SSE startup, routing, and shutdown;
 - `mcp-handler.ts` owns MCP request tracking and JSON-RPC method dispatch;
 - `tool-schemas.ts` contains the stable MCP tool schema objects;
-- `file-tools.ts` owns validated upload/download handling and remote file scripts;
+- `file-tools.ts` owns legacy small-file base64 upload/download handling;
+- `artifact-transfer.ts` owns ChatGPT file references, binary SSH transfer, SHA-256 verification, atomic commits, and short-lived export resources;
 - `metrics.ts` renders Prometheus text from the existing runner and registry state.
 
 `server.ts` is the composition root. Lower-level modules do not import initialized server state or import `server.ts`.
@@ -84,6 +85,8 @@ Exposed tools:
 - `cancel_exec`
 - `download_file`
 - `upload_file`
+- `import_chatgpt_file`
+- `export_remote_file`
 
 MCP `tools/call` returns bounded final text and structured content. Live streaming is available only through `/exec`.
 
@@ -145,15 +148,21 @@ This avoids claiming safe capacity while an execution has an unresolved local tr
 
 ## File transfer
 
-File tools execute small Python 3 scripts through the same SSH transport.
+Two transfer classes are intentionally separated.
 
-- Relative paths resolve from `DEFAULT_CWD`.
-- Real paths must remain inside `ALLOWED_CWDS`.
-- Downloads accept regular files only.
-- Upload parents must already exist.
-- Encoded and decoded sizes are bounded.
-- Files over the limit are rejected rather than truncated.
-- Symlink escapes are rejected after realpath resolution.
+Legacy `upload_file` and `download_file` embed base64 in MCP JSON and remain only for small compatibility cases. Their encoded and decoded sizes are bounded.
+
+Artifact tools keep file bytes out of model arguments and results:
+
+- `import_chatgpt_file` receives a ChatGPT-authorized temporary file reference, downloads to a bounded local spool, computes SHA-256, streams raw bytes through SSH stdin, writes a same-directory temporary file remotely, fsyncs it, and atomically commits it.
+- A retry to an existing destination succeeds only when size and SHA-256 are identical; different content requires explicit `overwrite=true`.
+- `export_remote_file` streams raw remote bytes through SSH stdout, verifies size and SHA-256 locally, and stores an immutable temporary object behind a 256-bit capability token.
+- Export results contain both a ChatGPT file-reference object and an MCP HTTPS `resource_link`.
+- Capability URLs expire and have a bounded GET count. HEAD requests and byte ranges are supported.
+- Relative remote paths resolve from `DEFAULT_CWD`; real paths and parents must remain inside `ALLOWED_CWDS`; symlinks and non-regular files are rejected.
+- Artifact size, concurrency, and end-to-end duration are bounded independently from command execution.
+
+Secure MCP Tunnel carries MCP JSON-RPC, not arbitrary artifact GET requests. A deployment using the tunnel therefore exposes only the capability-token `/artifacts/` path through a separate HTTPS data-plane ingress, while keeping command and MCP routes private.
 
 ## Security boundaries
 
@@ -194,4 +203,4 @@ npm run build
 npm run validate
 ```
 
-The current suite contains 57 passing tests.
+The current suite contains 58 passing tests, including random-binary bidirectional artifact transfer, idempotent retry, checksum failure, HEAD, and byte-range coverage.

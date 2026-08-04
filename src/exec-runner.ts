@@ -472,7 +472,7 @@ function spawnCommand(config: ExecMcpConfig, req: ValidatedExecRequest): { child
   return spawnRemoteShell(config, buildRemoteScript(req));
 }
 
-export function spawnRemoteShell(config: ExecMcpConfig, stdin: string): { child: ChildProcessWithoutNullStreams; stdin: string } {
+export function spawnRemoteProcess(config: ExecMcpConfig, remoteCommand: readonly string[]): ChildProcessWithoutNullStreams {
   if (!config.remote.host || !config.remote.keyPath) {
     throw new Error('remote execution requires REMOTE_HOST and REMOTE_KEY_PATH');
   }
@@ -487,15 +487,18 @@ export function spawnRemoteShell(config: ExecMcpConfig, stdin: string): { child:
     '-o', 'UserKnownHostsFile=' + config.remote.knownHostsPath,
     '-o', 'LogLevel=ERROR',
     destination,
-    '/bin/sh', '-s'
+    remoteCommand.map(shellQuote).join(' ')
   ];
-  const child = spawn(config.remote.bin || 'ssh', args, {
+  return spawn(config.remote.bin || 'ssh', args, {
     cwd: '/tmp',
     env: sanitizedEnv({}),
     detached: true,
     stdio: ['pipe', 'pipe', 'pipe']
   });
-  return { child, stdin };
+}
+
+export function spawnRemoteShell(config: ExecMcpConfig, stdin: string): { child: ChildProcessWithoutNullStreams; stdin: string } {
+  return { child: spawnRemoteProcess(config, ['/bin/sh', '-s']), stdin };
 }
 
 function buildRemoteScript(req: ValidatedExecRequest): string {
@@ -578,6 +581,10 @@ function buildRemoteScript(req: ValidatedExecRequest): string {
   lines.push('fi');
   lines.push('exit "$STATUS"');
   return lines.join('\n') + '\n';
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 function b64(value: unknown): string {
