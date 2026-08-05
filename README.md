@@ -170,7 +170,7 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 | `ARTIFACT_DOWNLOAD_TTL_SECONDS` | `900` | Exported capability URL lifetime. |
 | `ARTIFACT_MAX_DOWNLOADS` | `5` | Maximum successful GET downloads per exported capability URL. HEAD does not consume the limit. |
 | `ARTIFACT_TRANSFER_TIMEOUT_SECONDS` | `600` | End-to-end artifact transfer timeout. |
-| `ARTIFACT_IMPORT_ALLOWED_HOSTS` | empty | Optional comma-separated exact hosts or wildcard suffixes such as `.oaiusercontent.com` allowed for file-reference downloads. Empty permits any HTTPS host in the trusted single-tenant model. |
+| `ARTIFACT_IMPORT_ALLOWED_HOSTS` | empty | Optional comma-separated exact hosts or suffix rules. A leading dot matches the suffix and all subdomains, for example `.oaiusercontent.com` or `.blob.core.windows.net`. Empty permits any HTTPS host in the trusted single-tenant model. |
 | `ARTIFACT_IMPORT_ALLOW_HTTP` | `false` | Allow HTTP file-reference URLs. Intended only for local tests. |
 | `RECENT_EXEC_HISTORY_LIMIT` | `100` | Number of finalized executions retained in memory. |
 | `EXPOSE_REDACTED_COMMAND_PREVIEW` | `false` | Expose a redacted command preview in operator status. |

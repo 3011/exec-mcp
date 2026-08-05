@@ -107,7 +107,7 @@ The gateway authenticates with an SSH key and trusts the server identity establi
 
 Identical import retries are idempotent. Different bytes cannot replace an existing destination unless the caller explicitly sets `overwrite=true`.
 
-**Residual risk:** an empty `ARTIFACT_IMPORT_ALLOWED_HOSTS` permits any HTTPS source in the trusted single-tenant model and can be abused for SSRF by a compromised trusted client. Set a narrow host suffix such as `.oaiusercontent.com` after validating the current ChatGPT file host. Capability URLs are bearer secrets until they expire. The gateway does not inspect file content, so downstream consumers must handle untrusted formats safely.
+**Residual risk:** an empty `ARTIFACT_IMPORT_ALLOWED_HOSTS` permits any HTTPS source in the trusted single-tenant model and can be abused for SSRF by a compromised trusted client. A suffix rule intentionally trusts every matching host: `.oaiusercontent.com` is relatively narrow, while `.blob.core.windows.net` permits all Azure Blob storage accounts. Choose the scope according to the deployment trust model, continue revalidating every redirect, and keep private-network access constrained by the outbound proxy or network policy. Capability URLs are bearer secrets until they expire. The gateway does not inspect file content, so downstream consumers must handle untrusted formats safely.
 
 ### Cross-tenant execution control
 

@@ -15,6 +15,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - Documented `export_remote_file` as metadata plus `resource_link`, with a directly ingestible MCP embedded resource for files up to the configured embed ceiling.
 - Reduced the default embedded-resource ceiling to the validated 1 MiB production-safe value.
 - Tightened titles, descriptions, annotations, and output schemas for all remaining MCP tools.
+- Clarified import-host suffix matching and the security scope of broad rules such as `.blob.core.windows.net`.
 
 ## [0.4.0] - 2026-08-04
 
