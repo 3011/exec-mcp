@@ -58,7 +58,6 @@ export function createServer(config: ExecMcpConfig = parseConfig()): { server: H
         return;
       }
 
-      if (await artifacts.handleHttp(req, res)) return;
 
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'not_found' }));

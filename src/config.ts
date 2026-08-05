@@ -24,10 +24,7 @@ export interface ExecMcpConfig {
   artifactEmbedMaxBytes: number;
   artifactMaxConcurrentTransfers: number;
   artifactSpoolDir: string;
-  artifactPublicBaseUrl: string;
-  artifactToolBridgeToken: string;
-  artifactDownloadTtlSeconds: number;
-  artifactMaxDownloads: number;
+  artifactEmbedUriBase: string;
   artifactTransferTimeoutSeconds: number;
   artifactImportAllowHttp: boolean;
   artifactImportAllowedHosts: string[];
@@ -61,13 +58,10 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     hardMaxOutputBytes: positiveInt(env.HARD_MAX_OUTPUT_BYTES, 20 * 1024 * 1024),
     mcpMaxRequestBytes: positiveInt(env.MCP_MAX_REQUEST_BYTES, 16 * 1024 * 1024),
     artifactMaxBytes: positiveInt(env.ARTIFACT_MAX_BYTES, 256 * 1024 * 1024),
-    artifactEmbedMaxBytes: positiveInt(env.ARTIFACT_EMBED_MAX_BYTES, 1 * 1024 * 1024),
+    artifactEmbedMaxBytes: positiveInt(env.ARTIFACT_EMBED_MAX_BYTES, 16 * 1024 * 1024),
     artifactMaxConcurrentTransfers: positiveInt(env.ARTIFACT_MAX_CONCURRENT_TRANSFERS, 2),
     artifactSpoolDir: env.ARTIFACT_SPOOL_DIR || '/tmp/exec-mcp-artifacts',
-    artifactPublicBaseUrl: String(env.ARTIFACT_PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
-    artifactToolBridgeToken: String(env.ARTIFACT_TOOL_BRIDGE_TOKEN || '').trim(),
-    artifactDownloadTtlSeconds: positiveInt(env.ARTIFACT_DOWNLOAD_TTL_SECONDS, 900),
-    artifactMaxDownloads: positiveInt(env.ARTIFACT_MAX_DOWNLOADS, 5),
+    artifactEmbedUriBase: String(env.ARTIFACT_EMBED_URI_BASE || 'https://exec-mcp.invalid/embedded').replace(/\/+$/, ''),
     artifactTransferTimeoutSeconds: positiveInt(env.ARTIFACT_TRANSFER_TIMEOUT_SECONDS, 600),
     artifactImportAllowHttp: String(env.ARTIFACT_IMPORT_ALLOW_HTTP || 'false').toLowerCase() === 'true',
     artifactImportAllowedHosts: splitCsv(env.ARTIFACT_IMPORT_ALLOWED_HOSTS || ''),

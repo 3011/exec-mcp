@@ -29,7 +29,6 @@ interface McpContext {
 
 type ToolContent =
   | { type: 'text'; text: string }
-  | { type: 'resource_link'; uri: string; name: string; description?: string; mimeType?: string; size?: number; annotations?: { audience?: string[]; priority?: number } }
   | { type: 'resource'; resource: { uri: string; mimeType?: string; blob: string }; annotations?: { audience?: string[]; priority?: number } };
 
 interface ToolResultEnvelope {
@@ -177,33 +176,16 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
         return toolResult(id, JSON.stringify(result, null, 2), false, result);
       }
       if (name === 'export_remote_file') {
-        const prepared = await artifacts.exportRemoteFile(args, context.signal);
-        const embeddedResource = await artifacts.embedExportedArtifact(prepared);
-        const result = {
-          ...prepared,
-          embedded: embeddedResource !== null,
-          delivery_mode: embeddedResource ? 'embedded_resource' as const : 'resource_link_only' as const
-        };
+        const exported = await artifacts.exportRemoteFile(args, context.signal);
         const content: ToolContent[] = [
-          { type: 'text', text: JSON.stringify(result, null, 2) },
+          { type: 'text', text: JSON.stringify(exported.result, null, 2) },
           {
-            type: 'resource_link',
-            uri: result.download_url,
-            name: result.file_name,
-            description: `Verified remote file export (${result.bytes} bytes, sha256 ${result.sha256}, delivery ${result.delivery_mode})`,
-            mimeType: result.mime_type,
-            size: result.bytes,
-            annotations: { audience: ['user', 'assistant'], priority: 1 }
+            type: 'resource',
+            resource: exported.resource,
+            annotations: { audience: ['assistant'], priority: 1 }
           }
         ];
-        if (embeddedResource) {
-          content.push({
-            type: 'resource',
-            resource: embeddedResource,
-            annotations: { audience: ['assistant'], priority: 1 }
-          });
-        }
-        return toolResultWithContent(id, content, false, result);
+        return toolResultWithContent(id, content, false, exported.result);
       }
       return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {

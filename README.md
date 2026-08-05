@@ -18,8 +18,7 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 - Configurable command timeout, output limit, concurrency limit, and bounded tail buffers.
 - Remote working-directory allowlist with realpath and symlink-escape checks.
 - ChatGPT-native bidirectional artifact transfer using file references, binary SSH streaming, SHA-256 verification, and atomic remote commits.
-- Short-lived capability URLs and MCP resource links for exporting remote files without base64.
-- Base64 file upload and download retained for small-file compatibility.
+- Embedded-resource export that materializes verified remote files into ChatGPT without model-authored Base64.
 - Active execution listing, recent status lookup, and idempotent cancellation.
 - Process-group cleanup, timeout escalation, disconnect cancellation, and emergency circuit breaking.
 - Secret-pattern redaction for streamed output and retained tails.
@@ -37,7 +36,7 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 | `get_exec_status` | Read an active execution, bounded history record, or retained transport diagnostic. |
 | `cancel_exec` | Idempotently request cancellation of an active remote execution. |
 | `import_chatgpt_file` | Transfer a current ChatGPT file into the remote environment with SHA-256 verification and atomic commit. |
-| `export_remote_file` | Transfer a verified remote file toward ChatGPT as a resource link and, when small enough, an embedded resource placed in `/mnt/data`. |
+| `export_remote_file` | Transfer one verified remote file to ChatGPT as an embedded resource for host-side materialization into `/mnt/data`; oversized files are rejected. |
 
 The control-plane tools are operator-wide. They assume one trusted tenant and are intentionally available even when command capacity is full.
 
@@ -65,7 +64,7 @@ docker run --rm \
   -e DEFAULT_CWD=/workspace \
   -v "$PWD/id_ed25519:/run/secrets/id_ed25519:ro" \
   -v "$PWD/known_hosts:/run/secrets/known_hosts:ro" \
-  ghcr.io/3011/exec-mcp:v0.4.0
+  ghcr.io/3011/exec-mcp:v0.5.0
 ```
 
 The example binds only to loopback. Add authentication and TLS at the surrounding transport layer before making the service reachable from another machine.
@@ -94,7 +93,6 @@ npm start
 - `GET /metrics`
 - `POST /exec` with `Accept: text/event-stream`
 - `POST /mcp` for MCP Streamable HTTP / JSON-RPC
-- `GET|HEAD /artifacts/<capability-token>/<filename>` for short-lived exported-file downloads
 - Optional separate metrics listener on `METRICS_PORT`
 
 ### MCP initialization
@@ -161,14 +159,11 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 | `HEARTBEAT_SECONDS` | `15` | SSE heartbeat interval. |
 | `KILL_GRACE_SECONDS` | `5` | Delay between termination and forced kill. |
 | `MCP_MAX_REQUEST_BYTES` | `16777216` | Maximum MCP request body size. |
-| `ARTIFACT_MAX_BYTES` | `268435456` | Maximum imported or exported artifact size. |
-| `ARTIFACT_EMBED_MAX_BYTES` | `1048576` | Maximum export size included as one MCP embedded resource for direct compatible-host ingestion. Larger files return only the HTTPS resource link. |
+| `ARTIFACT_MAX_BYTES` | `268435456` | Absolute artifact size ceiling. Imports may use the full value; exports are additionally capped by `ARTIFACT_EMBED_MAX_BYTES`. |
+| `ARTIFACT_EMBED_MAX_BYTES` | `16777216` | Maximum remote export size carried as one MCP embedded resource. Larger files are rejected; there is no URL fallback. |
 | `ARTIFACT_MAX_CONCURRENT_TRANSFERS` | `2` | Maximum concurrent artifact imports and exports. |
 | `ARTIFACT_SPOOL_DIR` | `/tmp/exec-mcp-artifacts` | Local temporary/cache directory for artifact transfer. |
-| `ARTIFACT_PUBLIC_BASE_URL` | empty | Public HTTPS origin used to build exported-file resource links. Required for `export_remote_file`. |
-| `ARTIFACT_TOOL_BRIDGE_TOKEN` | empty | Optional 32-128 character URL-safe capability token. When set, `export_remote_file` reuses a stable `/tool-container/<token>/current` URL for direct tool-runtime downloads. |
-| `ARTIFACT_DOWNLOAD_TTL_SECONDS` | `900` | Exported capability URL lifetime. |
-| `ARTIFACT_MAX_DOWNLOADS` | `5` | Maximum successful GET downloads per exported capability URL. HEAD does not consume the limit. |
+| `ARTIFACT_EMBED_URI_BASE` | `https://exec-mcp.invalid/embedded` | Identifier base placed in embedded-resource URIs. It is metadata only; the host receives bytes from the MCP `blob` field and must not fetch this URI. |
 | `ARTIFACT_TRANSFER_TIMEOUT_SECONDS` | `600` | End-to-end artifact transfer timeout. |
 | `ARTIFACT_IMPORT_ALLOWED_HOSTS` | empty | Optional comma-separated exact hosts or suffix rules. A leading dot matches the suffix and all subdomains, for example `.oaiusercontent.com` or `.blob.core.windows.net`. Empty permits any HTTPS host in the trusted single-tenant model. |
 | `ARTIFACT_IMPORT_ALLOW_HTTP` | `false` | Allow HTTP file-reference URLs. Intended only for local tests. |
@@ -183,15 +178,11 @@ For all lifecycle and circuit-breaker settings, see [DESIGN.md](DESIGN.md).
 
 Use `import_chatgpt_file` for files attached to or generated in the current ChatGPT conversation. The tool declares `_meta["openai/fileParams"]`, so ChatGPT replaces the conversation-local file path with a temporary `{ download_url, file_id, mime_type?, file_name? }` reference. `exec-mcp` downloads the binary bytes to a bounded local spool, computes SHA-256, streams the bytes over SSH, verifies the remote hash, and commits the destination atomically. Retried calls are idempotent when the existing destination has identical bytes.
 
-Use `export_remote_file` for the reverse direction. It streams the remote file, verifies SHA-256, and returns:
+Use `export_remote_file` for the reverse direction. It streams the remote file into a bounded local spool, verifies size and SHA-256, reads the verified bytes, and returns exactly one MCP embedded binary resource plus structured metadata (`bytes`, `sha256`, `file_name`, `embedded=true`, and `delivery_mode=embedded_resource`). A compatible ChatGPT host can materialize that resource as a real file in `/mnt/data` while preserving `file_name`.
 
-- structured metadata including `bytes`, `sha256`, `file_name`, `download_url`, `embedded`, and `delivery_mode`;
-- a standard MCP `resource_link` with a short-lived HTTPS capability URL; and
-- when `embedded=true`, an MCP embedded binary resource so compatible hosts can create a real backing file for tool-container use.
+Exports larger than `ARTIFACT_EMBED_MAX_BYTES` are rejected with `file_too_large`; the service deliberately provides no `resource_link`, public download URL, or large-file fallback. The embedded `blob` is Base64 at the MCP protocol layer, so the practical ceiling must account for Base64 expansion, JSON framing, tunnel limits, host materialization limits, and gateway memory. The configured default is 16 MiB and is covered by backend boundary tests, but deployment-specific ChatGPT host behavior must still be verified end to end.
 
-Files above `ARTIFACT_EMBED_MAX_BYTES` return `embedded=false` and `delivery_mode=resource_link_only`; automatic large-file chunking is not currently provided. Small verified exports return `delivery_mode=embedded_resource`. Do not fabricate an OpenAI `file_id` for exported files. Only the ChatGPT host can mint a real file ID when it ingests the embedded resource.
-
-The Secure MCP Tunnel transports MCP JSON-RPC only. If the MCP endpoint stays private behind the tunnel, expose only the artifact data-plane routes through a separate HTTPS ingress or object store: `/artifacts/<token>/...` for per-export capabilities and, when `ARTIFACT_TOOL_BRIDGE_TOKEN` is configured, `/tool-container/<token>/current` for the fixed bridge. Do not expose `/mcp`, `/exec`, `/metrics`, or `/healthz` on the artifact hostname. Capability URLs contain 256 bits of randomness, expire, and have a bounded download count, but they must still be treated as bearer secrets.
+Secure MCP Tunnel carries the embedded bytes inside MCP JSON-RPC, so remote-to-ChatGPT export requires no public artifact ingress. Keep `/mcp`, `/exec`, `/metrics`, and `/healthz` private behind the authenticated transport.
 
 ## Development
 

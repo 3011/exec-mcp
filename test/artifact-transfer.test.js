@@ -30,7 +30,7 @@ async function mcpCall(base, id, name, args) {
   return response.json();
 }
 
-test('ChatGPT file references and resource links transfer random binary bytes in both directions', async () => {
+test('ChatGPT file references and embedded resources transfer random binary bytes in both directions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'exec-mcp-artifacts-root-'));
   const spool = await mkdtemp(join(tmpdir(), 'exec-mcp-artifacts-spool-'));
   const bytes = randomBytes(256 * 1024 + 37);
@@ -69,19 +69,15 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     DEFAULT_CWD: root,
     ARTIFACT_MAX_BYTES: String(2 * 1024 * 1024),
     ARTIFACT_EMBED_MAX_BYTES: String(512 * 1024),
-    ARTIFACT_TOOL_BRIDGE_TOKEN: 'tool_bridge_test_token_0123456789abcdef',
     ARTIFACT_SPOOL_DIR: spool,
-    ARTIFACT_PUBLIC_BASE_URL: 'http://placeholder.invalid',
+    ARTIFACT_EMBED_URI_BASE: 'https://artifact-test.invalid/embedded',
     ARTIFACT_IMPORT_ALLOW_HTTP: 'true',
     ARTIFACT_IMPORT_ALLOWED_HOSTS: '127.0.0.1',
-    ARTIFACT_DOWNLOAD_TTL_SECONDS: '300',
-    ARTIFACT_MAX_DOWNLOADS: '5',
     ARTIFACT_TRANSFER_TIMEOUT_SECONDS: '10',
     ...remoteTestEnv()
   });
   const instance = createServer(config);
   const base = await listen(instance.server);
-  config.artifactPublicBaseUrl = base;
 
   try {
     const imported = await mcpCall(base, 1, 'import_chatgpt_file', {
@@ -146,40 +142,68 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(exported.result.structuredContent.mime_type, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     assert.equal(exported.result.structuredContent.embedded, true);
     assert.equal(exported.result.structuredContent.delivery_mode, 'embedded_resource');
-    assert.deepEqual(exported.result.content.map((item) => item.type), ['text', 'resource_link', 'resource']);
-    assert.equal(exported.result.content[1].uri, exported.result.structuredContent.download_url);
-    assert.equal(exported.result.content[1].name, 'result ü.pptx');
-    assert.equal(exported.result.content[1].size, bytes.length);
-    assert.equal(exported.result.content[2].resource.uri, `${base}/embedded/${expectedSha}/result%20%C3%BC.pptx`);
-    assert.deepEqual(Buffer.from(exported.result.content[2].resource.blob, 'base64'), bytes);
-    assert.equal(exported.result.structuredContent.download_url, `${base}/tool-container/tool_bridge_test_token_0123456789abcdef/current`);
-    const head = await fetch(exported.result.structuredContent.download_url, { method: 'HEAD' });
-    assert.equal(head.status, 200);
-    assert.equal(Number(head.headers.get('content-length')), bytes.length);
-    assert.match(head.headers.get('content-disposition'), /filename\*=/);
-    assert.equal(head.headers.get('digest'), `sha-256=${Buffer.from(expectedSha, 'hex').toString('base64')}`);
+    assert.equal(exported.result.structuredContent.download_url, undefined);
+    assert.deepEqual(exported.result.content.map((item) => item.type), ['text', 'resource']);
+    assert.equal(exported.result.content[1].resource.uri, `https://artifact-test.invalid/embedded/${expectedSha}/result%20%C3%BC.pptx`);
+    assert.deepEqual(Buffer.from(exported.result.content[1].resource.blob, 'base64'), bytes);
 
-    const downloaded = await fetch(exported.result.structuredContent.download_url);
-    assert.equal(downloaded.status, 200);
-    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
-
-    const ranged = await fetch(exported.result.structuredContent.download_url, { headers: { range: 'bytes=100-199' } });
-    assert.equal(ranged.status, 206);
-    assert.equal(ranged.headers.get('content-range'), `bytes 100-199/${bytes.length}`);
-    assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), bytes.subarray(100, 200));
-
-    const linkOnlyBytes = randomBytes(600 * 1024);
-    await writeFile(join(root, 'link-only.bin'), linkOnlyBytes);
-    const linkOnly = await mcpCall(base, 5, 'export_remote_file', { path: 'link-only.bin' });
-    assert.equal(linkOnly.result.isError, false);
-    assert.equal(linkOnly.result.structuredContent.bytes, linkOnlyBytes.length);
-    assert.equal(linkOnly.result.structuredContent.embedded, false);
-    assert.equal(linkOnly.result.structuredContent.delivery_mode, 'resource_link_only');
-    assert.deepEqual(linkOnly.result.content.map((item) => item.type), ['text', 'resource_link']);
+    const oversizedBytes = randomBytes(600 * 1024);
+    await writeFile(join(root, 'oversized.bin'), oversizedBytes);
+    const oversized = await mcpCall(base, 5, 'export_remote_file', { path: 'oversized.bin' });
+    assert.equal(oversized.result.isError, true);
+    assert.equal(oversized.result.structuredContent.code, 'file_too_large');
+    assert.deepEqual(oversized.result.content.map((item) => item.type), ['text']);
   } finally {
     instance.runner.registry.close();
     await new Promise((resolve) => instance.server.close(resolve));
     await new Promise((resolve) => source.close(resolve));
+    await rm(root, { recursive: true, force: true });
+    await rm(spool, { recursive: true, force: true });
+  }
+});
+
+test('embedded-only export accepts exactly 16 MiB and rejects the next byte', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-root-'));
+  const spool = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-spool-'));
+  const limit = 16 * 1024 * 1024;
+  const exactBytes = Buffer.alloc(limit, 0x5a);
+  const expectedSha = sha256(exactBytes);
+  const config = parseConfig({
+    HOST: '127.0.0.1',
+    PORT: '0',
+    ALLOWED_CWDS: root,
+    DEFAULT_CWD: root,
+    ARTIFACT_MAX_BYTES: String(256 * 1024 * 1024),
+    ARTIFACT_EMBED_MAX_BYTES: String(limit),
+    ARTIFACT_EMBED_URI_BASE: 'https://artifact-test.invalid/embedded',
+    ARTIFACT_SPOOL_DIR: spool,
+    ARTIFACT_TRANSFER_TIMEOUT_SECONDS: '30',
+    ...remoteTestEnv()
+  });
+  const instance = createServer(config);
+  const base = await listen(instance.server);
+
+  try {
+    await writeFile(join(root, 'exact-16m.bin'), exactBytes);
+    const exact = await mcpCall(base, 100, 'export_remote_file', { path: 'exact-16m.bin' });
+    assert.equal(exact.result.isError, false);
+    assert.equal(exact.result.structuredContent.bytes, limit);
+    assert.equal(exact.result.structuredContent.sha256, expectedSha);
+    assert.equal(exact.result.structuredContent.embedded, true);
+    assert.equal(exact.result.structuredContent.delivery_mode, 'embedded_resource');
+    assert.deepEqual(exact.result.content.map((item) => item.type), ['text', 'resource']);
+    const materialized = Buffer.from(exact.result.content[1].resource.blob, 'base64');
+    assert.equal(materialized.length, limit);
+    assert.equal(sha256(materialized), expectedSha);
+
+    await writeFile(join(root, 'over-16m.bin'), Buffer.alloc(limit + 1, 0x41));
+    const over = await mcpCall(base, 101, 'export_remote_file', { path: 'over-16m.bin' });
+    assert.equal(over.result.isError, true);
+    assert.equal(over.result.structuredContent.code, 'file_too_large');
+    assert.deepEqual(over.result.content.map((item) => item.type), ['text']);
+  } finally {
+    instance.runner.registry.close();
+    await new Promise((resolve) => instance.server.close(resolve));
     await rm(root, { recursive: true, force: true });
     await rm(spool, { recursive: true, force: true });
   }

@@ -147,17 +147,16 @@ This avoids claiming safe capacity while an execution has an unresolved local tr
 
 Two transfer classes are intentionally separated.
 
-Artifact tools keep file bytes out of model-authored arguments and ordinary text results. Small exports may include a protocol-level MCP embedded resource that the host ingests directly without model copying:
+Artifact tools keep file bytes out of model-authored arguments and ordinary text fields. Remote exports use a protocol-level MCP embedded resource that the host can ingest directly without model copying:
 
 - `import_chatgpt_file` receives a ChatGPT-authorized temporary file reference, downloads to a bounded local spool, computes SHA-256, streams raw bytes through SSH stdin, writes a same-directory temporary file remotely, fsyncs it, and atomically commits it.
 - A retry to an existing destination succeeds only when size and SHA-256 are identical; different content requires explicit `overwrite=true`.
-- `export_remote_file` streams raw remote bytes through SSH stdout, verifies size and SHA-256 locally, and stores an immutable temporary object behind a 256-bit capability token.
-- Export results always contain structured metadata, including `embedded` and the explicit `delivery_mode` (`embedded_resource` or `resource_link_only`), plus an MCP HTTPS `resource_link`. Files no larger than `ARTIFACT_EMBED_MAX_BYTES` also contain an MCP embedded binary resource. Compatible ChatGPT hosts ingest that resource into the current working container while preserving the requested file name. Automatic large-file chunking is not currently provided.
-- Capability URLs expire and have a bounded GET count. HEAD requests and byte ranges are supported.
+- `export_remote_file` streams raw remote bytes through SSH stdout into a private temporary directory, verifies size and SHA-256 locally, converts the verified file to one MCP embedded `blob`, and removes the spool before returning.
+- Successful exports always return `embedded=true` and `delivery_mode=embedded_resource`. Files above `ARTIFACT_EMBED_MAX_BYTES` are rejected rather than downgraded to a URL-based mode.
 - Relative remote paths resolve from `DEFAULT_CWD`; real paths and parents must remain inside `ALLOWED_CWDS`; symlinks and non-regular files are rejected.
-- Artifact size, concurrency, and end-to-end duration are bounded independently from command execution.
+- Artifact size, concurrency, and end-to-end duration are bounded independently from command execution. Base64 and JSON framing expand the response, so the embedded ceiling must be validated against the tunnel and ChatGPT host as well as the backend.
 
-Secure MCP Tunnel carries MCP JSON-RPC, not arbitrary artifact GET requests. A deployment using the tunnel therefore exposes only the capability-protected artifact data-plane paths through a separate HTTPS ingress: `/artifacts/<token>/...`, plus `/tool-container/<token>/current` when the fixed bridge is configured. Command, MCP, metrics, and health routes remain private.
+Secure MCP Tunnel carries the complete embedded resource inside MCP JSON-RPC. No public artifact data plane or export ingress is required; command, MCP, metrics, and health routes remain private.
 
 ## Security boundaries
 

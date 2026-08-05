@@ -43,10 +43,10 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.deepEqual(importArtifact._meta['openai/fileParams'], ['file']);
     assert.deepEqual(importArtifact.inputSchema.$defs.OpenAIFile.required, ['download_url', 'file_id']);
     assert.deepEqual(Object.keys(importArtifact.inputSchema.$defs.OpenAIFile.properties), ['download_url', 'file_id', 'mime_type', 'file_name']);
-    assert.equal(exportArtifact.outputSchema.properties.download_url.type, 'string');
+    assert.equal(exportArtifact.outputSchema.properties.download_url, undefined);
     assert.equal(exportArtifact.outputSchema.properties.file_uri, undefined);
-    assert.equal(exportArtifact.outputSchema.properties.embedded.type, 'boolean');
-    assert.deepEqual(exportArtifact.outputSchema.properties.delivery_mode.enum, ['embedded_resource', 'resource_link_only']);
+    assert.deepEqual(exportArtifact.outputSchema.properties.embedded.enum, [true]);
+    assert.deepEqual(exportArtifact.outputSchema.properties.delivery_mode.enum, ['embedded_resource']);
     assert.equal(tool.annotations.openWorldHint, true);
     assert.equal(listActive.title, 'List active remote executions');
     assert.ok(listActive.outputSchema.properties.tasks.items.properties.exec_id.description);
@@ -62,9 +62,9 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.match(importArtifact.description, /atomically commits/);
     assert.match(exportArtifact.description, /embedded MCP binary resource/);
     assert.match(exportArtifact.description, /ARTIFACT_EMBED_MAX_BYTES/);
-    assert.match(exportArtifact.description, /delivery_mode=embedded_resource/);
-    assert.match(exportArtifact.description, /Automatic large-file chunking is not currently provided/);
-    assert.doesNotMatch(exportArtifact.description, /separate chunked-export workflow/);
+    assert.match(exportArtifact.description, /Files larger .* are rejected/);
+    assert.match(exportArtifact.description, /no resource-link or external-URL fallback/);
+    assert.doesNotMatch(exportArtifact.description, /resource_link_only/);
     assert.equal(body.result.tools.find((item) => item.name === 'read_file'), undefined);
     assert.equal(body.result.tools.find((item) => item.name === 'write_file'), undefined);
     assert.equal(tool.outputSchema.type, 'object');

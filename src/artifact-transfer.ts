@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, readFile, rename, rm, stat, unlink } from 'node:fs/promises';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { ExecMcpConfig } from './config.js';
@@ -32,19 +31,17 @@ export interface ExportedArtifact {
   sha256: string;
   mime_type: string;
   file_name: string;
-  download_url: string;
-  expires_at: string;
-  downloads_remaining: number;
-  embedded: boolean;
-  delivery_mode: 'embedded_resource' | 'resource_link_only';
+  embedded: true;
+  delivery_mode: 'embedded_resource';
 }
 
-interface ArtifactRecord extends ExportedArtifact {
-  token: string;
-  local_path: string;
-  expires_at_ms: number;
-  downloads: number;
-  max_downloads: number;
+export interface EmbeddedExport {
+  result: ExportedArtifact;
+  resource: {
+    uri: string;
+    mimeType: string;
+    blob: string;
+  };
 }
 
 interface RemoteWriteResult {
@@ -80,18 +77,11 @@ export class ArtifactTransferError extends Error {
 }
 
 export class ArtifactTransferManager {
-  private readonly records = new Map<string, ArtifactRecord>();
-  private readonly cleanupTimer: NodeJS.Timeout;
   private activeTransfers = 0;
 
-  constructor(readonly config: ExecMcpConfig) {
-    this.cleanupTimer = setInterval(() => { void this.cleanupExpired(); }, 60_000);
-    this.cleanupTimer.unref?.();
-  }
+  constructor(readonly config: ExecMcpConfig) {}
 
-  close(): void {
-    clearInterval(this.cleanupTimer);
-  }
+  close(): void {}
 
   async importChatgptFile(args: UnknownRecord, signal?: AbortSignal): Promise<ImportedArtifact> {
     return this.withTransferSlot(async () => {
@@ -148,138 +138,51 @@ export class ArtifactTransferManager {
     });
   }
 
-  async exportRemoteFile(args: UnknownRecord, signal?: AbortSignal): Promise<ExportedArtifact> {
+  async exportRemoteFile(args: UnknownRecord, signal?: AbortSignal): Promise<EmbeddedExport> {
     return this.withTransferSlot(async () => {
-      if (!this.config.artifactPublicBaseUrl) {
-        throw new ArtifactTransferError('artifact_public_base_url_missing', 'ARTIFACT_PUBLIC_BASE_URL is required for export_remote_file');
-      }
       const sourcePath = requirePath(args.path, 'path');
-      const maxBytes = clampMaxBytes(args.max_bytes, this.config.artifactMaxBytes);
+      const exportLimit = Math.min(this.config.artifactMaxBytes, this.config.artifactEmbedMaxBytes);
+      const maxBytes = clampMaxBytes(args.max_bytes, exportLimit);
       const requestedName = typeof args.file_name === 'string' && args.file_name.trim() ? safeFileName(args.file_name) : '';
-      const fixedToken = normalizeToolBridgeToken(this.config.artifactToolBridgeToken);
-      const token = fixedToken || randomBytes(32).toString('hex');
+      const temp = await this.allocateTempPath('export');
       const guard = createTransferGuard(signal, this.config.artifactTransferTimeoutSeconds);
-      const tmpPath = join(this.config.artifactSpoolDir, `.${token}.tmp`);
-      const finalPath = join(this.config.artifactSpoolDir, token);
 
       try {
-        await mkdir(this.config.artifactSpoolDir, { recursive: true });
-        const remote = await readRemoteFileToLocal(sourcePath, tmpPath, maxBytes, this.config, guard.signal);
-        await rename(tmpPath, finalPath);
+        const remote = await readRemoteFileToLocal(sourcePath, temp.tmpPath, maxBytes, this.config, guard.signal);
         const fileName = requestedName || safeFileName(basename(remote.path));
         const mimeType = detectMimeType(fileName);
-        const expiresAtMs = Date.now() + this.config.artifactDownloadTtlSeconds * 1000;
-        const url = fixedToken
-          ? `${this.config.artifactPublicBaseUrl}/tool-container/${token}/current`
-          : `${this.config.artifactPublicBaseUrl}/artifacts/${token}/${encodeURIComponent(fileName)}`;
-        const record: ArtifactRecord = {
-          token,
-          local_path: finalPath,
+        const info = await stat(temp.tmpPath);
+        if (!info.isFile() || info.size !== remote.bytes || info.size > exportLimit) {
+          throw new ArtifactTransferError('artifact_embed_validation_failed', 'exported artifact changed or exceeds the embedded-resource limit');
+        }
+        const bytes = await readFile(temp.tmpPath);
+        if (bytes.length !== remote.bytes) {
+          throw new ArtifactTransferError('artifact_embed_validation_failed', 'exported artifact size changed before embedding');
+        }
+        const result: ExportedArtifact = {
           path: remote.path,
           bytes: remote.bytes,
           sha256: remote.sha256,
           mime_type: mimeType,
           file_name: fileName,
-          download_url: url,
-          expires_at: new Date(expiresAtMs).toISOString(),
-          expires_at_ms: expiresAtMs,
-          downloads: 0,
-          max_downloads: this.config.artifactMaxDownloads,
-          downloads_remaining: this.config.artifactMaxDownloads,
-          embedded: remote.bytes <= this.config.artifactEmbedMaxBytes,
-          delivery_mode: remote.bytes <= this.config.artifactEmbedMaxBytes ? 'embedded_resource' : 'resource_link_only'
+          embedded: true,
+          delivery_mode: 'embedded_resource'
         };
-        this.records.set(token, record);
-        return publicRecord(record);
+        return {
+          result,
+          resource: {
+            uri: `${this.config.artifactEmbedUriBase}/${remote.sha256}/${encodeURIComponent(fileName)}`,
+            mimeType,
+            blob: bytes.toString('base64')
+          }
+        };
       } catch (error) {
-        await rm(tmpPath, { force: true });
         throw guard.mapError(error);
       } finally {
         guard.close();
+        await rm(temp.dir, { recursive: true, force: true });
       }
     });
-  }
-
-  async embedExportedArtifact(result: ExportedArtifact): Promise<{ uri: string; mimeType: string; blob: string } | null> {
-    if (!result.embedded || result.delivery_mode !== 'embedded_resource' || result.bytes > this.config.artifactEmbedMaxBytes) return null;
-    const record = [...this.records.values()].find((candidate) =>
-      candidate.download_url === result.download_url
-      && candidate.sha256 === result.sha256
-      && candidate.bytes === result.bytes
-    );
-    if (!record || record.expires_at_ms <= Date.now()) return null;
-    const info = await stat(record.local_path);
-    if (!info.isFile() || info.size !== record.bytes || info.size > this.config.artifactEmbedMaxBytes) {
-      throw new ArtifactTransferError('artifact_embed_validation_failed', 'exported artifact changed before embedding');
-    }
-    const bytes = await readFile(record.local_path);
-    return {
-      uri: `${this.config.artifactPublicBaseUrl}/embedded/${record.sha256}/${encodeURIComponent(record.file_name)}`,
-      mimeType: record.mime_type,
-      blob: bytes.toString('base64')
-    };
-  }
-
-  async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    const parsed = new URL(req.url || '/', 'http://exec-mcp.invalid');
-    const match = /^\/(?:artifacts|tool-container)\/([A-Za-z0-9_-]{32,128})(?:\/.*)?$/.exec(parsed.pathname);
-    if (!match) return false;
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'method_not_allowed' }));
-      return true;
-    }
-
-    const token = match[1] as string;
-    const record = this.records.get(token);
-    if (!record || record.expires_at_ms <= Date.now() || record.downloads >= record.max_downloads) {
-      if (record) await this.deleteRecord(record);
-      res.writeHead(404, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ error: 'artifact_not_found_or_expired' }));
-      return true;
-    }
-
-    let info;
-    try {
-      info = await stat(record.local_path);
-    } catch {
-      await this.deleteRecord(record);
-      res.writeHead(404, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ error: 'artifact_not_found' }));
-      return true;
-    }
-
-    const range = parseRange(req.headers.range, info.size);
-    const status = range ? 206 : 200;
-    const start = range?.start ?? 0;
-    const end = range?.end ?? Math.max(0, info.size - 1);
-    const length = info.size === 0 ? 0 : end - start + 1;
-    const headers: Record<string, string | number> = {
-      'content-type': record.mime_type,
-      'content-length': length,
-      'content-disposition': contentDisposition(record.file_name),
-      'cache-control': 'private, no-store, max-age=0',
-      'accept-ranges': 'bytes',
-      'x-content-type-options': 'nosniff',
-      etag: `"sha256-${record.sha256}"`,
-      digest: `sha-256=${Buffer.from(record.sha256, 'hex').toString('base64')}`
-    };
-    if (range) headers['content-range'] = `bytes ${start}-${end}/${info.size}`;
-    res.writeHead(status, headers);
-    if (req.method === 'HEAD' || info.size === 0) {
-      res.end();
-      return true;
-    }
-
-    record.downloads += 1;
-    record.downloads_remaining = Math.max(0, record.max_downloads - record.downloads);
-    const stream = createReadStream(record.local_path, { start, end });
-    stream.on('error', () => {
-      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
-      res.destroy();
-    });
-    stream.pipe(res);
-    return true;
   }
 
   private async withTransferSlot<T>(operation: () => Promise<T>): Promise<T> {
@@ -303,42 +206,6 @@ export class ArtifactTransferManager {
     await mkdir(dir, { mode: 0o700 });
     return { dir, tmpPath: join(dir, 'payload') };
   }
-
-  private async cleanupExpired(): Promise<void> {
-    const now = Date.now();
-    const expired = [...this.records.values()].filter((record) => record.expires_at_ms <= now || record.downloads >= record.max_downloads);
-    await Promise.all(expired.map((record) => this.deleteRecord(record)));
-  }
-
-  private async deleteRecord(record: ArtifactRecord): Promise<void> {
-    this.records.delete(record.token);
-    await unlink(record.local_path).catch(() => undefined);
-  }
-}
-
-
-function normalizeToolBridgeToken(value: string): string | null {
-  const token = value.trim();
-  if (!token) return null;
-  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
-    throw new ArtifactTransferError('invalid_tool_bridge_token', 'ARTIFACT_TOOL_BRIDGE_TOKEN must contain 32-128 URL-safe characters');
-  }
-  return token;
-}
-
-function publicRecord(record: ArtifactRecord): ExportedArtifact {
-  return {
-    path: record.path,
-    bytes: record.bytes,
-    sha256: record.sha256,
-    mime_type: record.mime_type,
-    file_name: record.file_name,
-    download_url: record.download_url,
-    expires_at: record.expires_at,
-    downloads_remaining: record.downloads_remaining,
-    embedded: record.embedded,
-    delivery_mode: record.delivery_mode
-  };
 }
 
 function requireOpenAIFile(value: unknown): OpenAIFileReference {
@@ -637,33 +504,6 @@ function detectMimeType(filePath: string): string {
     case '.tar': return 'application/x-tar';
     default: return 'application/octet-stream';
   }
-}
-
-function parseRange(header: string | undefined, size: number): { start: number; end: number } | null {
-  if (!header || size === 0) return null;
-  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!match) return null;
-  const startText = match[1] || '';
-  const endText = match[2] || '';
-  if (!startText && !endText) return null;
-  let start: number;
-  let end: number;
-  if (!startText) {
-    const suffix = Number(endText);
-    if (!Number.isInteger(suffix) || suffix <= 0) return null;
-    start = Math.max(0, size - suffix);
-    end = size - 1;
-  } else {
-    start = Number(startText);
-    end = endText ? Number(endText) : size - 1;
-  }
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= size) return null;
-  return { start, end: Math.min(end, size - 1) };
-}
-
-function contentDisposition(name: string): string {
-  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {

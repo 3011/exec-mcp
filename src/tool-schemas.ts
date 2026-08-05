@@ -303,13 +303,13 @@ function exportRemoteFileToolSchema() {
   return {
     name: 'export_remote_file',
     title: 'Export remote file to ChatGPT',
-    description: 'Transfer one allowed regular file from the configured remote test environment to the current ChatGPT session or tool runtime. Use this tool for remote-to-ChatGPT file transfer instead of exec. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns structured metadata plus a short-lived MCP resource_link. When the verified file is no larger than ARTIFACT_EMBED_MAX_BYTES, delivery_mode=embedded_resource and the result also contains an embedded MCP binary resource that compatible ChatGPT hosts can place directly in /mnt/data using file_name. For larger files, delivery_mode=resource_link_only: no automatic /mnt/data file is created and only the HTTPS resource link is available. Automatic large-file chunking is not currently provided. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.',
+    description: 'Transfer one allowed regular file from the configured remote test environment into the current ChatGPT session as one embedded MCP binary resource. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns the complete file for host-side materialization into /mnt/data. Files larger than ARTIFACT_EMBED_MAX_BYTES are rejected; there is no resource-link or external-URL fallback. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', minLength: 1, description: 'Remote file path. Relative paths resolve from DEFAULT_CWD; the resolved regular file must remain inside ALLOWED_CWDS.' },
-        file_name: { type: 'string', minLength: 1, description: 'Optional safe output file name presented to the client. Defaults to the remote basename.' },
-        max_bytes: { type: 'integer', minimum: 1, description: 'Optional per-call file-size ceiling. It cannot exceed ARTIFACT_MAX_BYTES. Oversized files are rejected, never truncated.' }
+        file_name: { type: 'string', minLength: 1, description: 'Optional safe output file name used when ChatGPT materializes the embedded resource. Defaults to the remote basename.' },
+        max_bytes: { type: 'integer', minimum: 1, description: 'Optional per-call file-size ceiling. It cannot exceed ARTIFACT_EMBED_MAX_BYTES. Oversized files are rejected, never truncated.' }
       },
       required: ['path'],
       additionalProperties: false
@@ -319,22 +319,19 @@ function exportRemoteFileToolSchema() {
       properties: {
         path: { type: 'string', description: 'Resolved remote source path.' },
         bytes: { type: 'integer', minimum: 0, description: 'Verified source size.' },
-        sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Verified SHA-256 of the exported bytes.' },
+        sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Verified SHA-256 of the embedded bytes.' },
         mime_type: { type: 'string', description: 'Best-effort MIME type derived from file_name.' },
-        file_name: { type: 'string', description: 'Safe client-visible file name used for the resource and embedded-file path.' },
-        download_url: { type: 'string', description: 'Short-lived HTTPS bearer-capability URL supporting GET, HEAD, and byte ranges.' },
-        expires_at: { type: 'string', description: 'UTC expiry timestamp for download_url.' },
-        downloads_remaining: { type: 'integer', minimum: 0, description: 'Remaining successful GET allowance when the result was created. HEAD does not consume it.' },
-        embedded: { type: 'boolean', description: 'Backward-compatible boolean equivalent of delivery_mode=embedded_resource.' },
-        delivery_mode: { type: 'string', enum: ['embedded_resource', 'resource_link_only'], description: 'How the host can receive the exported bytes from this tool result.' }
+        file_name: { type: 'string', description: 'Safe file name used for host-side materialization.' },
+        embedded: { type: 'boolean', enum: [true], description: 'Always true on success.' },
+        delivery_mode: { type: 'string', enum: ['embedded_resource'], description: 'Always embedded_resource on success.' }
       },
-      required: ['path', 'bytes', 'sha256', 'mime_type', 'file_name', 'download_url', 'expires_at', 'downloads_remaining', 'embedded', 'delivery_mode'],
+      required: ['path', 'bytes', 'sha256', 'mime_type', 'file_name', 'embedded', 'delivery_mode'],
       additionalProperties: false
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     _meta: {
       'openai/toolInvocation/invoking': 'Exporting remote file to ChatGPT',
-      'openai/toolInvocation/invoked': 'Remote file exported and verified'
+      'openai/toolInvocation/invoked': 'Remote file embedded and verified'
     }
   };
 }

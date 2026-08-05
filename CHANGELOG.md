@@ -2,18 +2,19 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-08-05
 
 ### Removed
 
 - Removed the legacy `download_file` and `upload_file` MCP tools and their JSON `data_base64` transport path.
+- Removed remote-export `resource_link` delivery, public artifact GET/HEAD endpoints, capability tokens, fixed tool-container bridge URLs, and their TTL/download-count configuration.
 
 ### Changed
 
 - Refined MCP titles and selection-oriented descriptions while preserving all six public tool names and the configured test-environment wording.
 - Added strict active/history status schemas, cancellation outcome descriptions, and `delivery_mode` for exported files while retaining `embedded` for compatibility.
-- Documented `export_remote_file` as metadata plus `resource_link`, with a directly ingestible MCP embedded resource for files up to the configured embed ceiling.
-- Reduced the default embedded-resource ceiling to the validated 1 MiB production-safe value.
+- Changed `export_remote_file` to return exactly one embedded MCP resource; files above the configured ceiling now fail instead of falling back to an external URL.
+- Raised the default embedded-resource ceiling to 16 MiB and added exact-boundary backend tests for 16 MiB success and 16 MiB plus one byte rejection.
 - Tightened titles, descriptions, annotations, and output schemas for all remaining MCP tools.
 - Clarified import-host suffix matching and the security scope of broad rules such as `.blob.core.windows.net`.
 

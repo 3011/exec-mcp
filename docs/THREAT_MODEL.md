@@ -12,7 +12,6 @@ The intended deployment is a trusted, single-tenant MCP connection. Multi-tenant
 - Confidentiality of the SSH private key and remote files.
 - Confidentiality of command output and operational metadata.
 - Integrity of uploaded and exported files and executed commands.
-- Confidentiality of short-lived artifact capability URLs.
 - Availability of gateway execution capacity.
 - Integrity of the pinned remote SSH host identity.
 
@@ -21,10 +20,6 @@ The intended deployment is a trusted, single-tenant MCP connection. Multi-tenant
 ### Client to gateway
 
 The gateway accepts arbitrary shell commands and operator-wide lifecycle controls. There is no built-in authentication, authorization, or TLS. An external authenticated transport, reverse proxy, or private network boundary is mandatory.
-
-### Public artifact data plane
-
-When `export_remote_file` is enabled, only capability-protected artifact routes are intentionally reachable through a public HTTPS ingress: `/artifacts/<256-bit-token>/...`, and optionally `/tool-container/<high-entropy-token>/current` when the fixed tool bridge is configured. The MCP, exec, metrics, and health routes remain private. These URLs are bearer capabilities and must not be logged, indexed, or forwarded to untrusted parties.
 
 ### Gateway to remote host
 
@@ -99,15 +94,15 @@ The gateway authenticates with an SSH key and trusts the server identity establi
 
 **Residual risk:** redaction cannot recognize every secret format. Avoid printing secrets and keep lifecycle logs protected.
 
-### Malicious file import, export, or download
+### Malicious file import or export
 
-**Impact:** overwrite, exfiltration, SSRF, disk consumption, capability-link leakage, or unsafe downstream processing.
+**Impact:** overwrite, exfiltration, SSRF, disk or memory consumption, oversized MCP responses, or unsafe downstream processing.
 
-**Controls:** trusted callers only; optional import-host allowlist; HTTPS-only import by default; redirect revalidation; path allowlist and realpath checks; same-directory temporary files; symlink rejection; regular-file export requirement; size, concurrency, and timeout limits; SHA-256 verification; atomic commit; 256-bit export tokens; short TTL; bounded GET count; `Cache-Control: no-store`; and a public ingress restricted to the configured artifact data-plane paths (`/artifacts/` and, only when enabled, `/tool-container/`).
+**Controls:** trusted callers only; optional import-host allowlist; HTTPS-only import by default; redirect revalidation; path allowlist and realpath checks; same-directory temporary files; symlink rejection; regular-file export requirement; separate import and embedded-export size ceilings; concurrency and timeout limits; SHA-256 verification; atomic remote commit; temporary spool cleanup; and no public export URL or artifact ingress.
 
 Identical import retries are idempotent. Different bytes cannot replace an existing destination unless the caller explicitly sets `overwrite=true`.
 
-**Residual risk:** an empty `ARTIFACT_IMPORT_ALLOWED_HOSTS` permits any HTTPS source in the trusted single-tenant model and can be abused for SSRF by a compromised trusted client. A suffix rule intentionally trusts every matching host: `.oaiusercontent.com` is relatively narrow, while `.blob.core.windows.net` permits all Azure Blob storage accounts. Choose the scope according to the deployment trust model, continue revalidating every redirect, and keep private-network access constrained by the outbound proxy or network policy. Capability URLs are bearer secrets until they expire. The gateway does not inspect file content, so downstream consumers must handle untrusted formats safely.
+**Residual risk:** an empty `ARTIFACT_IMPORT_ALLOWED_HOSTS` permits any HTTPS source in the trusted single-tenant model and can be abused for SSRF by a compromised trusted client. A suffix rule intentionally trusts every matching host: `.oaiusercontent.com` is relatively narrow, while `.blob.core.windows.net` permits all Azure Blob storage accounts. Choose the scope according to the deployment trust model, continue revalidating every redirect, and keep private-network access constrained by the outbound proxy or network policy. The gateway does not inspect file content, so downstream consumers must handle untrusted formats safely.
 
 ### Cross-tenant execution control
 
@@ -124,8 +119,8 @@ Identical import retries are idempotent. Different bytes cannot replace an exist
 ## Deployment checklist
 
 - [ ] `/mcp`, `/exec`, `/metrics`, and `/healthz` are not directly internet-accessible.
-- [ ] If artifact export is enabled, the public ingress routes only `/artifacts/` and, when explicitly configured, `/tool-container/`; all use valid HTTPS.
-- [ ] Artifact capability URLs are excluded from access logs where possible and are never emitted in lifecycle logs.
+- [ ] No public artifact export ingress exists; embedded export travels only through the authenticated MCP transport.
+- [ ] `ARTIFACT_EMBED_MAX_BYTES` is set from an end-to-end tested host/tunnel limit and leaves headroom for Base64 and JSON expansion.
 - [ ] Authentication and encrypted transport exist before the gateway.
 - [ ] Network access is restricted to intended clients.
 - [ ] The SSH user is dedicated and non-root where possible.
