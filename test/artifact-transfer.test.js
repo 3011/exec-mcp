@@ -68,7 +68,7 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     ALLOWED_CWDS: root,
     DEFAULT_CWD: root,
     ARTIFACT_MAX_BYTES: String(1024 * 1024),
-    ARTIFACT_EMBED_MAX_BYTES: String(512 * 1024),
+    ARTIFACT_TOOL_BRIDGE_TOKEN: 'tool_bridge_test_token_0123456789abcdef',
     ARTIFACT_SPOOL_DIR: spool,
     ARTIFACT_PUBLIC_BASE_URL: 'http://placeholder.invalid',
     ARTIFACT_IMPORT_ALLOW_HTTP: 'true',
@@ -143,27 +143,19 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(exported.result.structuredContent.bytes, bytes.length);
     assert.equal(exported.result.structuredContent.sha256, expectedSha);
     assert.equal(exported.result.structuredContent.mime_type, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-    const link = exported.result.content.find((item) => item.type === 'resource_link');
-    assert.ok(link);
-    assert.equal(link.uri, exported.result.structuredContent.download_url);
-    assert.equal(link.size, bytes.length);
-    assert.equal(link.mimeType, exported.result.structuredContent.mime_type);
-    const embedded = exported.result.content.find((item) => item.type === 'resource');
-    assert.ok(embedded);
-    assert.equal(embedded.resource.uri, link.uri);
-    assert.equal(embedded.resource.mimeType, link.mimeType);
-    assert.deepEqual(Buffer.from(embedded.resource.blob, 'base64'), bytes);
-    const head = await fetch(link.uri, { method: 'HEAD' });
+    assert.deepEqual(exported.result.content.map((item) => item.type), ['text']);
+    assert.equal(exported.result.structuredContent.download_url, `${base}/tool-container/tool_bridge_test_token_0123456789abcdef/current`);
+    const head = await fetch(exported.result.structuredContent.download_url, { method: 'HEAD' });
     assert.equal(head.status, 200);
     assert.equal(Number(head.headers.get('content-length')), bytes.length);
     assert.match(head.headers.get('content-disposition'), /filename\*=/);
     assert.equal(head.headers.get('digest'), `sha-256=${Buffer.from(expectedSha, 'hex').toString('base64')}`);
 
-    const downloaded = await fetch(link.uri);
+    const downloaded = await fetch(exported.result.structuredContent.download_url);
     assert.equal(downloaded.status, 200);
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
 
-    const ranged = await fetch(link.uri, { headers: { range: 'bytes=100-199' } });
+    const ranged = await fetch(exported.result.structuredContent.download_url, { headers: { range: 'bytes=100-199' } });
     assert.equal(ranged.status, 206);
     assert.equal(ranged.headers.get('content-range'), `bytes 100-199/${bytes.length}`);
     assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), bytes.subarray(100, 200));

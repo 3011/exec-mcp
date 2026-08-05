@@ -166,10 +166,10 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 | `FILE_MAX_UPLOAD_BYTES` | `10485760` | Maximum decoded upload size. |
 | `MCP_MAX_REQUEST_BYTES` | `16777216` | Maximum MCP request body size. |
 | `ARTIFACT_MAX_BYTES` | `268435456` | Maximum imported or exported artifact size. |
-| `ARTIFACT_EMBED_MAX_BYTES` | `2097152` | Maximum export size also returned as an MCP embedded binary resource for host-side materialization. Larger files remain HTTPS resource links only. |
 | `ARTIFACT_MAX_CONCURRENT_TRANSFERS` | `2` | Maximum concurrent artifact imports and exports. |
 | `ARTIFACT_SPOOL_DIR` | `/tmp/exec-mcp-artifacts` | Local temporary/cache directory for artifact transfer. |
 | `ARTIFACT_PUBLIC_BASE_URL` | empty | Public HTTPS origin used to build exported-file resource links. Required for `export_remote_file`. |
+| `ARTIFACT_TOOL_BRIDGE_TOKEN` | empty | Optional 32-128 character URL-safe capability token. When set, `export_remote_file` reuses a stable `/tool-container/<token>/current` URL for direct tool-runtime downloads. |
 | `ARTIFACT_DOWNLOAD_TTL_SECONDS` | `900` | Exported capability URL lifetime. |
 | `ARTIFACT_MAX_DOWNLOADS` | `5` | Maximum successful GET downloads per exported capability URL. HEAD does not consume the limit. |
 | `ARTIFACT_TRANSFER_TIMEOUT_SECONDS` | `600` | End-to-end artifact transfer timeout. |

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, readFile, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, rename, rm, stat, unlink } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -154,7 +154,8 @@ export class ArtifactTransferManager {
       const sourcePath = requirePath(args.path, 'path');
       const maxBytes = clampMaxBytes(args.max_bytes, this.config.artifactMaxBytes);
       const requestedName = typeof args.file_name === 'string' && args.file_name.trim() ? safeFileName(args.file_name) : '';
-      const token = randomBytes(32).toString('hex');
+      const fixedToken = normalizeToolBridgeToken(this.config.artifactToolBridgeToken);
+      const token = fixedToken || randomBytes(32).toString('hex');
       const guard = createTransferGuard(signal, this.config.artifactTransferTimeoutSeconds);
       const tmpPath = join(this.config.artifactSpoolDir, `.${token}.tmp`);
       const finalPath = join(this.config.artifactSpoolDir, token);
@@ -166,7 +167,9 @@ export class ArtifactTransferManager {
         const fileName = requestedName || safeFileName(basename(remote.path));
         const mimeType = detectMimeType(fileName);
         const expiresAtMs = Date.now() + this.config.artifactDownloadTtlSeconds * 1000;
-        const url = `${this.config.artifactPublicBaseUrl}/artifacts/${token}/${encodeURIComponent(fileName)}`;
+        const url = fixedToken
+          ? `${this.config.artifactPublicBaseUrl}/tool-container/${token}/current`
+          : `${this.config.artifactPublicBaseUrl}/artifacts/${token}/${encodeURIComponent(fileName)}`;
         const record: ArtifactRecord = {
           token,
           local_path: finalPath,
@@ -193,26 +196,9 @@ export class ArtifactTransferManager {
     });
   }
 
-  async embedExportedArtifact(result: ExportedArtifact): Promise<{ uri: string; mimeType: string; blob: string } | null> {
-    if (result.bytes > this.config.artifactEmbedMaxBytes) return null;
-    const token = artifactTokenFromUrl(result.download_url);
-    const record = this.records.get(token);
-    if (!record || record.expires_at_ms <= Date.now()) return null;
-    const info = await stat(record.local_path);
-    if (!info.isFile() || info.size !== record.bytes || info.size > this.config.artifactEmbedMaxBytes) {
-      throw new ArtifactTransferError('artifact_embed_validation_failed', 'exported artifact changed before embedding');
-    }
-    const bytes = await readFile(record.local_path);
-    return {
-      uri: record.download_url,
-      mimeType: record.mime_type,
-      blob: bytes.toString('base64')
-    };
-  }
-
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const parsed = new URL(req.url || '/', 'http://exec-mcp.invalid');
-    const match = /^\/artifacts\/([a-f0-9]{64})(?:\/.*)?$/.exec(parsed.pathname);
+    const match = /^\/(?:artifacts|tool-container)\/([A-Za-z0-9_-]{32,128})(?:\/.*)?$/.exec(parsed.pathname);
     if (!match) return false;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'application/json' });
@@ -306,11 +292,14 @@ export class ArtifactTransferManager {
   }
 }
 
-function artifactTokenFromUrl(value: string): string {
-  const parsed = new URL(value);
-  const match = /^\/artifacts\/([a-f0-9]{64})(?:\/|$)/.exec(parsed.pathname);
-  if (!match) throw new ArtifactTransferError('invalid_artifact_url', 'exported artifact URL does not contain a valid token');
-  return match[1] as string;
+
+function normalizeToolBridgeToken(value: string): string | null {
+  const token = value.trim();
+  if (!token) return null;
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
+    throw new ArtifactTransferError('invalid_tool_bridge_token', 'ARTIFACT_TOOL_BRIDGE_TOKEN must contain 32-128 URL-safe characters');
+  }
+  return token;
 }
 
 function publicRecord(record: ArtifactRecord): ExportedArtifact {

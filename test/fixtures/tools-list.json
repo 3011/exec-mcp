@@ -444,7 +444,7 @@
       {
         "name": "export_remote_file",
         "title": "Export remote file",
-        "description": "Reliably export one allowed remote file to the current ChatGPT session or user as a short-lived HTTPS resource link. The file is streamed over SSH without base64, bounded by ARTIFACT_MAX_BYTES, hashed with SHA-256, cached immutably for a limited time, and returned as an MCP resource_link. Use this instead of download_file for documents, presentations, archives, images, and other non-trivial binary files.",
+        "description": "Prepare one allowed remote file for direct download by the current tool runtime. The file is streamed over SSH without base64, bounded by ARTIFACT_MAX_BYTES, hashed with SHA-256, atomically staged behind a short-lived HTTPS capability URL, and returned as metadata only. It does not create a ChatGPT conversation attachment. When ARTIFACT_TOOL_BRIDGE_TOKEN is configured, the URL remains stable across exports while its content is atomically replaced.",
         "inputSchema": {
           "type": "object",
           "properties": {
