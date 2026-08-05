@@ -162,10 +162,10 @@ test('ChatGPT file references and embedded resources transfer random binary byte
   }
 });
 
-test('embedded-only export accepts exactly 16 MiB and rejects the next byte', async () => {
+test('embedded-only export hard-caps at 4 MiB and rejects the next byte', async () => {
   const root = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-root-'));
   const spool = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-spool-'));
-  const limit = 16 * 1024 * 1024;
+  const limit = 4 * 1024 * 1024;
   const exactBytes = Buffer.alloc(limit, 0x5a);
   const expectedSha = sha256(exactBytes);
   const config = parseConfig({
@@ -174,18 +174,19 @@ test('embedded-only export accepts exactly 16 MiB and rejects the next byte', as
     ALLOWED_CWDS: root,
     DEFAULT_CWD: root,
     ARTIFACT_MAX_BYTES: String(256 * 1024 * 1024),
-    ARTIFACT_EMBED_MAX_BYTES: String(limit),
+    ARTIFACT_EMBED_MAX_BYTES: String(16 * 1024 * 1024),
     ARTIFACT_EMBED_URI_BASE: 'https://artifact-test.invalid/embedded',
     ARTIFACT_SPOOL_DIR: spool,
     ARTIFACT_TRANSFER_TIMEOUT_SECONDS: '30',
     ...remoteTestEnv()
   });
+  assert.equal(config.artifactEmbedMaxBytes, limit);
   const instance = createServer(config);
   const base = await listen(instance.server);
 
   try {
-    await writeFile(join(root, 'exact-16m.bin'), exactBytes);
-    const exact = await mcpCall(base, 100, 'export_remote_file', { path: 'exact-16m.bin' });
+    await writeFile(join(root, 'exact-4m.bin'), exactBytes);
+    const exact = await mcpCall(base, 100, 'export_remote_file', { path: 'exact-4m.bin' });
     assert.equal(exact.result.isError, false);
     assert.equal(exact.result.structuredContent.bytes, limit);
     assert.equal(exact.result.structuredContent.sha256, expectedSha);
@@ -196,8 +197,8 @@ test('embedded-only export accepts exactly 16 MiB and rejects the next byte', as
     assert.equal(materialized.length, limit);
     assert.equal(sha256(materialized), expectedSha);
 
-    await writeFile(join(root, 'over-16m.bin'), Buffer.alloc(limit + 1, 0x41));
-    const over = await mcpCall(base, 101, 'export_remote_file', { path: 'over-16m.bin' });
+    await writeFile(join(root, 'over-4m.bin'), Buffer.alloc(limit + 1, 0x41));
+    const over = await mcpCall(base, 101, 'export_remote_file', { path: 'over-4m.bin' });
     assert.equal(over.result.isError, true);
     assert.equal(over.result.structuredContent.code, 'file_too_large');
     assert.deepEqual(over.result.content.map((item) => item.type), ['text']);

@@ -2,6 +2,15 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-08-05
+
+### Changed
+
+- Hard-capped embedded remote exports at 4 MiB (4,194,304 bytes); `ARTIFACT_EMBED_MAX_BYTES` may lower but cannot raise the ceiling.
+- Updated the MCP tool description and project documentation to expose the 4 MiB limit and `file_too_large` behavior explicitly.
+- Replaced the 16 MiB backend-only boundary claim with the end-to-end platform result: 4 MiB materializes successfully, while a standalone 8 MiB export times out during ChatGPT ingestion/materialization.
+- Updated boundary tests so exactly 4 MiB succeeds and 4 MiB plus one byte is rejected, even when configuration attempts to request 16 MiB.
+
 ## [0.5.0] - 2026-08-05
 
 ### Removed

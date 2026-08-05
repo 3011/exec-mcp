@@ -303,13 +303,13 @@ function exportRemoteFileToolSchema() {
   return {
     name: 'export_remote_file',
     title: 'Export remote file to ChatGPT',
-    description: 'Transfer one allowed regular file from the configured remote test environment into the current ChatGPT session as one embedded MCP binary resource. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns the complete file for host-side materialization into /mnt/data. Files larger than ARTIFACT_EMBED_MAX_BYTES are rejected; there is no resource-link or external-URL fallback. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.',
+    description: 'Transfer one allowed regular file from the configured remote test environment into the current ChatGPT session as one embedded MCP binary resource. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns the complete file for host-side materialization into /mnt/data. Remote exports have a hard ceiling of 4 MiB (4,194,304 bytes); ARTIFACT_EMBED_MAX_BYTES may lower but cannot raise that ceiling. Larger files are rejected with file_too_large, and there is no resource-link or external-URL fallback. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', minLength: 1, description: 'Remote file path. Relative paths resolve from DEFAULT_CWD; the resolved regular file must remain inside ALLOWED_CWDS.' },
         file_name: { type: 'string', minLength: 1, description: 'Optional safe output file name used when ChatGPT materializes the embedded resource. Defaults to the remote basename.' },
-        max_bytes: { type: 'integer', minimum: 1, description: 'Optional per-call file-size ceiling. It cannot exceed ARTIFACT_EMBED_MAX_BYTES. Oversized files are rejected, never truncated.' }
+        max_bytes: { type: 'integer', minimum: 1, description: 'Optional per-call file-size ceiling. It cannot exceed the server limit, whose hard maximum is 4 MiB (4,194,304 bytes). Oversized files are rejected, never truncated.' }
       },
       required: ['path'],
       additionalProperties: false

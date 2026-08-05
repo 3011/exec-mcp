@@ -152,9 +152,9 @@ Artifact tools keep file bytes out of model-authored arguments and ordinary text
 - `import_chatgpt_file` receives a ChatGPT-authorized temporary file reference, downloads to a bounded local spool, computes SHA-256, streams raw bytes through SSH stdin, writes a same-directory temporary file remotely, fsyncs it, and atomically commits it.
 - A retry to an existing destination succeeds only when size and SHA-256 are identical; different content requires explicit `overwrite=true`.
 - `export_remote_file` streams raw remote bytes through SSH stdout into a private temporary directory, verifies size and SHA-256 locally, converts the verified file to one MCP embedded `blob`, and removes the spool before returning.
-- Successful exports always return `embedded=true` and `delivery_mode=embedded_resource`. Files above `ARTIFACT_EMBED_MAX_BYTES` are rejected rather than downgraded to a URL-based mode.
+- Successful exports always return `embedded=true` and `delivery_mode=embedded_resource`. Remote exports are hard-capped at 4 MiB (4,194,304 bytes); `ARTIFACT_EMBED_MAX_BYTES` may lower but cannot raise this ceiling. Larger files return `file_too_large` rather than being downgraded to a URL-based mode.
 - Relative remote paths resolve from `DEFAULT_CWD`; real paths and parents must remain inside `ALLOWED_CWDS`; symlinks and non-regular files are rejected.
-- Artifact size, concurrency, and end-to-end duration are bounded independently from command execution. Base64 and JSON framing expand the response, so the embedded ceiling must be validated against the tunnel and ChatGPT host as well as the backend.
+- Artifact size, concurrency, and end-to-end duration are bounded independently from command execution. Base64 and JSON framing expand the response. End-to-end testing established 4 MiB as the current stable ChatGPT materialization ceiling; a standalone 8 MiB source produced an approximately 11.2 MB MCP JSON response and timed out after reaching the platform ingestion/materialization boundary.
 
 Secure MCP Tunnel carries the complete embedded resource inside MCP JSON-RPC. No public artifact data plane or export ingress is required; command, MCP, metrics, and health routes remain private.
 

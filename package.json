@@ -1,6 +1,6 @@
 {
   "name": "exec-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Bounded SSH remote execution and file-transfer gateway for trusted MCP clients",
   "private": true,
   "type": "module",

@@ -1,3 +1,5 @@
+export const ARTIFACT_EMBED_HARD_MAX_BYTES = 4 * 1024 * 1024;
+
 export interface RemoteConfig {
   bin: string;
   binArgs: string[];
@@ -58,7 +60,7 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     hardMaxOutputBytes: positiveInt(env.HARD_MAX_OUTPUT_BYTES, 20 * 1024 * 1024),
     mcpMaxRequestBytes: positiveInt(env.MCP_MAX_REQUEST_BYTES, 16 * 1024 * 1024),
     artifactMaxBytes: positiveInt(env.ARTIFACT_MAX_BYTES, 256 * 1024 * 1024),
-    artifactEmbedMaxBytes: positiveInt(env.ARTIFACT_EMBED_MAX_BYTES, 16 * 1024 * 1024),
+    artifactEmbedMaxBytes: Math.min(positiveInt(env.ARTIFACT_EMBED_MAX_BYTES, ARTIFACT_EMBED_HARD_MAX_BYTES), ARTIFACT_EMBED_HARD_MAX_BYTES),
     artifactMaxConcurrentTransfers: positiveInt(env.ARTIFACT_MAX_CONCURRENT_TRANSFERS, 2),
     artifactSpoolDir: env.ARTIFACT_SPOOL_DIR || '/tmp/exec-mcp-artifacts',
     artifactEmbedUriBase: String(env.ARTIFACT_EMBED_URI_BASE || 'https://exec-mcp.invalid/embedded').replace(/\/+$/, ''),

@@ -61,8 +61,9 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.equal(exportArtifact.title, 'Export remote file to ChatGPT');
     assert.match(importArtifact.description, /atomically commits/);
     assert.match(exportArtifact.description, /embedded MCP binary resource/);
-    assert.match(exportArtifact.description, /ARTIFACT_EMBED_MAX_BYTES/);
-    assert.match(exportArtifact.description, /Files larger .* are rejected/);
+    assert.match(exportArtifact.description, /hard ceiling of 4 MiB \(4,194,304 bytes\)/);
+    assert.match(exportArtifact.description, /ARTIFACT_EMBED_MAX_BYTES may lower but cannot raise/);
+    assert.match(exportArtifact.description, /Larger files are rejected with file_too_large/);
     assert.match(exportArtifact.description, /no resource-link or external-URL fallback/);
     assert.doesNotMatch(exportArtifact.description, /resource_link_only/);
     assert.equal(body.result.tools.find((item) => item.name === 'read_file'), undefined);
