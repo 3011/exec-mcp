@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, unlink } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -74,12 +74,14 @@ interface ProcessCloseResult {
 export class ArtifactTransferError extends Error {
   readonly code: string;
   readonly statusCode: number | undefined;
+  readonly details: Record<string, unknown> | undefined;
 
-  constructor(code: string, message: string, statusCode?: number) {
+  constructor(code: string, message: string, statusCode?: number, details?: Record<string, unknown>) {
     super(message);
     this.name = 'ArtifactTransferError';
     this.code = code;
     this.statusCode = statusCode;
+    this.details = details;
   }
 }
 
@@ -204,6 +206,23 @@ export class ArtifactTransferManager {
         guard.close();
       }
     });
+  }
+
+  async embedExportedArtifact(result: ExportedArtifact): Promise<{ uri: string; mimeType: string; blob: string } | null> {
+    if (result.bytes > this.config.artifactEmbedMaxBytes) return null;
+    const token = result.file_uri.file_id.replace(/^file_execmcp_/, '');
+    const record = this.records.get(token);
+    if (!record || record.expires_at_ms <= Date.now()) return null;
+    const info = await stat(record.local_path);
+    if (!info.isFile() || info.size !== record.bytes || info.size > this.config.artifactEmbedMaxBytes) {
+      throw new ArtifactTransferError('artifact_embed_validation_failed', 'exported artifact changed before embedding');
+    }
+    const bytes = await readFile(record.local_path);
+    return {
+      uri: record.download_url,
+      mimeType: record.mime_type,
+      blob: bytes.toString('base64')
+    };
   }
 
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -351,7 +370,7 @@ function validateImportUrl(input: string, config: ExecMcpConfig): URL {
     throw new ArtifactTransferError('invalid_download_url', 'file.download_url must use HTTPS');
   }
   if (!hostAllowed(url.hostname, config.artifactImportAllowedHosts)) {
-    throw new ArtifactTransferError('download_host_not_allowed', `download host is not allowed: ${url.hostname}`);
+    throw new ArtifactTransferError('download_host_not_allowed', `download host is not allowed: ${url.hostname}`, undefined, { download_host: url.hostname.toLowerCase() });
   }
   return url;
 }

@@ -166,6 +166,7 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 | `FILE_MAX_UPLOAD_BYTES` | `10485760` | Maximum decoded upload size. |
 | `MCP_MAX_REQUEST_BYTES` | `16777216` | Maximum MCP request body size. |
 | `ARTIFACT_MAX_BYTES` | `268435456` | Maximum imported or exported artifact size. |
+| `ARTIFACT_EMBED_MAX_BYTES` | `2097152` | Maximum export size also returned as an MCP embedded binary resource for host-side materialization. Larger files remain HTTPS resource links only. |
 | `ARTIFACT_MAX_CONCURRENT_TRANSFERS` | `2` | Maximum concurrent artifact imports and exports. |
 | `ARTIFACT_SPOOL_DIR` | `/tmp/exec-mcp-artifacts` | Local temporary/cache directory for artifact transfer. |
 | `ARTIFACT_PUBLIC_BASE_URL` | empty | Public HTTPS origin used to build exported-file resource links. Required for `export_remote_file`. |
@@ -188,7 +189,8 @@ Use `import_chatgpt_file` for files attached to or generated in the current Chat
 Use `export_remote_file` for the reverse direction. It streams the remote file without base64, verifies SHA-256, and returns both:
 
 - `structuredContent.file_uri`, a ChatGPT tool-result file reference; and
-- a standard MCP `resource_link` with a short-lived HTTPS capability URL.
+- a standard MCP `resource_link` with a short-lived HTTPS capability URL; and
+- for files up to `ARTIFACT_EMBED_MAX_BYTES`, an MCP embedded binary resource so compatible hosts can create a real backing file for tool-container use.
 
 The Secure MCP Tunnel transports MCP JSON-RPC only. If the MCP endpoint stays private behind the tunnel, expose only `/artifacts/` through a separate HTTPS ingress or object store. Do not expose `/mcp`, `/exec`, `/metrics`, or `/healthz` on the artifact hostname. Capability URLs contain 256 bits of randomness, expire, and have a bounded download count, but they must still be treated as bearer secrets.
 

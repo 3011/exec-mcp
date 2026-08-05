@@ -68,6 +68,7 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     ALLOWED_CWDS: root,
     DEFAULT_CWD: root,
     ARTIFACT_MAX_BYTES: String(1024 * 1024),
+    ARTIFACT_EMBED_MAX_BYTES: String(512 * 1024),
     ARTIFACT_SPOOL_DIR: spool,
     ARTIFACT_PUBLIC_BASE_URL: 'http://placeholder.invalid',
     ARTIFACT_IMPORT_ALLOW_HTTP: 'true',
@@ -122,6 +123,18 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(wrongHash.result.isError, true);
     assert.match(wrongHash.result.content[0].text, /checksum_mismatch/);
 
+    const rejectedHost = await mcpCall(base, 31, 'import_chatgpt_file', {
+      file: {
+        download_url: 'https://files.example.invalid/private/path?signature=must-not-leak',
+        file_id: 'file_test_rejected_host'
+      },
+      target_path: 'rejected-host.bin'
+    });
+    assert.equal(rejectedHost.result.isError, true);
+    assert.equal(rejectedHost.result.structuredContent.code, 'download_host_not_allowed');
+    assert.equal(rejectedHost.result.structuredContent.download_host, 'files.example.invalid');
+    assert.doesNotMatch(JSON.stringify(rejectedHost), /must-not-leak|private\/path/);
+
     await writeFile(join(root, 'result ü.pptx'), bytes);
     const exported = await mcpCall(base, 4, 'export_remote_file', {
       path: 'result ü.pptx'
@@ -135,6 +148,11 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(link.uri, exported.result.structuredContent.download_url);
     assert.equal(link.size, bytes.length);
     assert.equal(link.mimeType, exported.result.structuredContent.mime_type);
+    const embedded = exported.result.content.find((item) => item.type === 'resource');
+    assert.ok(embedded);
+    assert.equal(embedded.resource.uri, link.uri);
+    assert.equal(embedded.resource.mimeType, link.mimeType);
+    assert.deepEqual(Buffer.from(embedded.resource.blob, 'base64'), bytes);
     assert.deepEqual(exported.result.structuredContent.file_uri, {
       download_url: link.uri,
       file_id: `file_execmcp_${link.uri.split('/artifacts/')[1].split('/')[0]}`,

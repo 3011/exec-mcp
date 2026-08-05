@@ -23,6 +23,7 @@ export interface ExecMcpConfig {
   fileMaxDownloadBytes: number;
   fileMaxUploadBytes: number;
   artifactMaxBytes: number;
+  artifactEmbedMaxBytes: number;
   artifactMaxConcurrentTransfers: number;
   artifactSpoolDir: string;
   artifactPublicBaseUrl: string;
@@ -63,6 +64,7 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     fileMaxDownloadBytes: positiveInt(env.FILE_MAX_DOWNLOAD_BYTES, 10 * 1024 * 1024),
     fileMaxUploadBytes: positiveInt(env.FILE_MAX_UPLOAD_BYTES, 10 * 1024 * 1024),
     artifactMaxBytes: positiveInt(env.ARTIFACT_MAX_BYTES, 256 * 1024 * 1024),
+    artifactEmbedMaxBytes: positiveInt(env.ARTIFACT_EMBED_MAX_BYTES, 2 * 1024 * 1024),
     artifactMaxConcurrentTransfers: positiveInt(env.ARTIFACT_MAX_CONCURRENT_TRANSFERS, 2),
     artifactSpoolDir: env.ARTIFACT_SPOOL_DIR || '/tmp/exec-mcp-artifacts',
     artifactPublicBaseUrl: String(env.ARTIFACT_PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
