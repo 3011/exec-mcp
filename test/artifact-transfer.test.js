@@ -147,7 +147,7 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(exported.result.content[1].uri, exported.result.structuredContent.download_url);
     assert.equal(exported.result.content[1].name, 'result ü.pptx');
     assert.equal(exported.result.content[1].size, bytes.length);
-    assert.equal(exported.result.content[2].resource.uri, exported.result.structuredContent.download_url);
+    assert.equal(exported.result.content[2].resource.uri, `${base}/embedded/${expectedSha}/result%20%C3%BC.pptx`);
     assert.deepEqual(Buffer.from(exported.result.content[2].resource.blob, 'base64'), bytes);
     assert.equal(exported.result.structuredContent.download_url, `${base}/tool-container/tool_bridge_test_token_0123456789abcdef/current`);
     const head = await fetch(exported.result.structuredContent.download_url, { method: 'HEAD' });

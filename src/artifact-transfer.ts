@@ -210,7 +210,7 @@ export class ArtifactTransferManager {
     }
     const bytes = await readFile(record.local_path);
     return {
-      uri: record.download_url,
+      uri: `${this.config.artifactPublicBaseUrl}/embedded/${record.sha256}/${encodeURIComponent(record.file_name)}`,
       mimeType: record.mime_type,
       blob: bytes.toString('base64')
     };
