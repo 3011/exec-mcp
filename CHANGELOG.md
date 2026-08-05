@@ -10,6 +10,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ### Changed
 
+- Refined MCP titles and selection-oriented descriptions while preserving all six public tool names and the configured test-environment wording.
+- Added strict active/history status schemas, cancellation outcome descriptions, and `delivery_mode` for exported files while retaining `embedded` for compatibility.
 - Documented `export_remote_file` as metadata plus `resource_link`, with a directly ingestible MCP embedded resource for files up to the configured embed ceiling.
 - Reduced the default embedded-resource ceiling to the validated 1 MiB production-safe value.
 - Tightened titles, descriptions, annotations, and output schemas for all remaining MCP tools.

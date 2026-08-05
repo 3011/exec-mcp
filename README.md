@@ -33,11 +33,11 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 | Tool | Purpose |
 |---|---|
 | `exec` | Run one bounded non-interactive command on the configured remote host. |
-| `list_active_execs` | List active executions without consuming an execution slot. |
-| `get_exec_status` | Read an active execution or a record from bounded recent history. |
-| `cancel_exec` | Idempotently request cancellation of an active execution. |
-| `import_chatgpt_file` | Import a current ChatGPT file reference into the remote environment with SHA-256 verification and atomic commit. |
-| `export_remote_file` | Export a verified remote file as an MCP `resource_link`; files up to the embed limit also become embedded resources that compatible ChatGPT hosts place in `/mnt/data`. |
+| `list_active_execs` | List active remote executions without consuming an execution slot. |
+| `get_exec_status` | Read an active execution, bounded history record, or retained transport diagnostic. |
+| `cancel_exec` | Idempotently request cancellation of an active remote execution. |
+| `import_chatgpt_file` | Transfer a current ChatGPT file into the remote environment with SHA-256 verification and atomic commit. |
+| `export_remote_file` | Transfer a verified remote file toward ChatGPT as a resource link and, when small enough, an embedded resource placed in `/mnt/data`. |
 
 The control-plane tools are operator-wide. They assume one trusted tenant and are intentionally available even when command capacity is full.
 
@@ -185,11 +185,11 @@ Use `import_chatgpt_file` for files attached to or generated in the current Chat
 
 Use `export_remote_file` for the reverse direction. It streams the remote file, verifies SHA-256, and returns:
 
-- structured metadata including `bytes`, `sha256`, `file_name`, `download_url`, and `embedded`;
+- structured metadata including `bytes`, `sha256`, `file_name`, `download_url`, `embedded`, and `delivery_mode`;
 - a standard MCP `resource_link` with a short-lived HTTPS capability URL; and
 - when `embedded=true`, an MCP embedded binary resource so compatible hosts can create a real backing file for tool-container use.
 
-Files above `ARTIFACT_EMBED_MAX_BYTES` return `embedded=false`; automatic large-file chunking is not yet a first-class MCP tool. Do not fabricate an OpenAI `file_id` for exported files. Only the ChatGPT host can mint a real file ID when it ingests the embedded resource.
+Files above `ARTIFACT_EMBED_MAX_BYTES` return `embedded=false` and `delivery_mode=resource_link_only`; automatic large-file chunking is not currently provided. Small verified exports return `delivery_mode=embedded_resource`. Do not fabricate an OpenAI `file_id` for exported files. Only the ChatGPT host can mint a real file ID when it ingests the embedded resource.
 
 The Secure MCP Tunnel transports MCP JSON-RPC only. If the MCP endpoint stays private behind the tunnel, expose only the artifact data-plane routes through a separate HTTPS ingress or object store: `/artifacts/<token>/...` for per-export capabilities and, when `ARTIFACT_TOOL_BRIDGE_TOKEN` is configured, `/tool-container/<token>/current` for the fixed bridge. Do not expose `/mcp`, `/exec`, `/metrics`, or `/healthz` on the artifact hostname. Capability URLs contain 256 bits of randomness, expire, and have a bounded download count, but they must still be treated as bearer secrets.
 

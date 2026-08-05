@@ -36,6 +36,7 @@ export interface ExportedArtifact {
   expires_at: string;
   downloads_remaining: number;
   embedded: boolean;
+  delivery_mode: 'embedded_resource' | 'resource_link_only';
 }
 
 interface ArtifactRecord extends ExportedArtifact {
@@ -185,7 +186,8 @@ export class ArtifactTransferManager {
           downloads: 0,
           max_downloads: this.config.artifactMaxDownloads,
           downloads_remaining: this.config.artifactMaxDownloads,
-          embedded: remote.bytes <= this.config.artifactEmbedMaxBytes
+          embedded: remote.bytes <= this.config.artifactEmbedMaxBytes,
+          delivery_mode: remote.bytes <= this.config.artifactEmbedMaxBytes ? 'embedded_resource' : 'resource_link_only'
         };
         this.records.set(token, record);
         return publicRecord(record);
@@ -199,7 +201,7 @@ export class ArtifactTransferManager {
   }
 
   async embedExportedArtifact(result: ExportedArtifact): Promise<{ uri: string; mimeType: string; blob: string } | null> {
-    if (result.bytes > this.config.artifactEmbedMaxBytes) return null;
+    if (!result.embedded || result.delivery_mode !== 'embedded_resource' || result.bytes > this.config.artifactEmbedMaxBytes) return null;
     const record = [...this.records.values()].find((candidate) =>
       candidate.download_url === result.download_url
       && candidate.sha256 === result.sha256
@@ -334,7 +336,8 @@ function publicRecord(record: ArtifactRecord): ExportedArtifact {
     download_url: record.download_url,
     expires_at: record.expires_at,
     downloads_remaining: record.downloads_remaining,
-    embedded: record.embedded
+    embedded: record.embedded,
+    delivery_mode: record.delivery_mode
   };
 }
 

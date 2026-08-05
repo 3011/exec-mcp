@@ -145,6 +145,7 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(exported.result.structuredContent.sha256, expectedSha);
     assert.equal(exported.result.structuredContent.mime_type, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     assert.equal(exported.result.structuredContent.embedded, true);
+    assert.equal(exported.result.structuredContent.delivery_mode, 'embedded_resource');
     assert.deepEqual(exported.result.content.map((item) => item.type), ['text', 'resource_link', 'resource']);
     assert.equal(exported.result.content[1].uri, exported.result.structuredContent.download_url);
     assert.equal(exported.result.content[1].name, 'result ü.pptx');
@@ -173,6 +174,7 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(linkOnly.result.isError, false);
     assert.equal(linkOnly.result.structuredContent.bytes, linkOnlyBytes.length);
     assert.equal(linkOnly.result.structuredContent.embedded, false);
+    assert.equal(linkOnly.result.structuredContent.delivery_mode, 'resource_link_only');
     assert.deepEqual(linkOnly.result.content.map((item) => item.type), ['text', 'resource_link']);
   } finally {
     instance.runner.registry.close();

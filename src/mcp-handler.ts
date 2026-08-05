@@ -177,24 +177,29 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
         return toolResult(id, JSON.stringify(result, null, 2), false, result);
       }
       if (name === 'export_remote_file') {
-        const result = await artifacts.exportRemoteFile(args, context.signal);
+        const prepared = await artifacts.exportRemoteFile(args, context.signal);
+        const embeddedResource = await artifacts.embedExportedArtifact(prepared);
+        const result = {
+          ...prepared,
+          embedded: embeddedResource !== null,
+          delivery_mode: embeddedResource ? 'embedded_resource' as const : 'resource_link_only' as const
+        };
         const content: ToolContent[] = [
           { type: 'text', text: JSON.stringify(result, null, 2) },
           {
             type: 'resource_link',
             uri: result.download_url,
             name: result.file_name,
-            description: `Verified remote file export (${result.bytes} bytes, sha256 ${result.sha256})`,
+            description: `Verified remote file export (${result.bytes} bytes, sha256 ${result.sha256}, delivery ${result.delivery_mode})`,
             mimeType: result.mime_type,
             size: result.bytes,
             annotations: { audience: ['user', 'assistant'], priority: 1 }
           }
         ];
-        const embedded = await artifacts.embedExportedArtifact(result);
-        if (embedded) {
+        if (embeddedResource) {
           content.push({
             type: 'resource',
-            resource: embedded,
+            resource: embeddedResource,
             annotations: { audience: ['assistant'], priority: 1 }
           });
         }
