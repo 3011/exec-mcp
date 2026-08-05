@@ -186,11 +186,12 @@ For all lifecycle and circuit-breaker settings, see [DESIGN.md](DESIGN.md).
 
 Use `import_chatgpt_file` for files attached to or generated in the current ChatGPT conversation. The tool declares `_meta["openai/fileParams"]`, so ChatGPT replaces the conversation-local file path with a temporary `{ download_url, file_id, mime_type?, file_name? }` reference. `exec-mcp` downloads the binary bytes to a bounded local spool, computes SHA-256, streams the bytes over SSH, verifies the remote hash, and commits the destination atomically. Retried calls are idempotent when the existing destination has identical bytes.
 
-Use `export_remote_file` for the reverse direction. It streams the remote file without base64, verifies SHA-256, and returns both:
+Use `export_remote_file` for the reverse direction. It streams the remote file, verifies SHA-256, and returns:
 
-- `structuredContent.file_uri`, a ChatGPT tool-result file reference; and
 - a standard MCP `resource_link` with a short-lived HTTPS capability URL; and
 - for files up to `ARTIFACT_EMBED_MAX_BYTES`, an MCP embedded binary resource so compatible hosts can create a real backing file for tool-container use.
+
+Do not fabricate an OpenAI `file_id` for exported files. Only the ChatGPT host can mint a real file ID when it ingests the embedded resource.
 
 The Secure MCP Tunnel transports MCP JSON-RPC only. If the MCP endpoint stays private behind the tunnel, expose only `/artifacts/` through a separate HTTPS ingress or object store. Do not expose `/mcp`, `/exec`, `/metrics`, or `/healthz` on the artifact hostname. Capability URLs contain 256 bits of randomness, expire, and have a bounded download count, but they must still be treated as bearer secrets.
 

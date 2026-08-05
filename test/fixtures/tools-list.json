@@ -496,30 +496,6 @@
             "downloads_remaining": {
               "type": "integer",
               "minimum": 0
-            },
-            "file_uri": {
-              "type": "object",
-              "properties": {
-                "download_url": {
-                  "type": "string"
-                },
-                "file_id": {
-                  "type": "string"
-                },
-                "mime_type": {
-                  "type": "string"
-                },
-                "file_name": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "download_url",
-                "file_id",
-                "mime_type",
-                "file_name"
-              ],
-              "additionalProperties": false
             }
           },
           "required": [
@@ -530,8 +506,7 @@
             "file_name",
             "download_url",
             "expires_at",
-            "downloads_remaining",
-            "file_uri"
+            "downloads_remaining"
           ],
           "additionalProperties": false
         },

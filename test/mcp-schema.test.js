@@ -42,7 +42,7 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.deepEqual(importArtifact.inputSchema.$defs.OpenAIFile.required, ['download_url', 'file_id']);
     assert.deepEqual(Object.keys(importArtifact.inputSchema.$defs.OpenAIFile.properties), ['download_url', 'file_id', 'mime_type', 'file_name']);
     assert.equal(exportArtifact.outputSchema.properties.download_url.type, 'string');
-    assert.deepEqual(exportArtifact.outputSchema.properties.file_uri.required, ['download_url', 'file_id', 'mime_type', 'file_name']);
+    assert.equal(exportArtifact.outputSchema.properties.file_uri, undefined);
     assert.equal(body.result.tools.find((item) => item.name === 'read_file'), undefined);
     assert.equal(body.result.tools.find((item) => item.name === 'write_file'), undefined);
     assert.equal(tool.outputSchema.type, 'object');

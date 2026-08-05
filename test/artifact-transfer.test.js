@@ -153,13 +153,6 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(embedded.resource.uri, link.uri);
     assert.equal(embedded.resource.mimeType, link.mimeType);
     assert.deepEqual(Buffer.from(embedded.resource.blob, 'base64'), bytes);
-    assert.deepEqual(exported.result.structuredContent.file_uri, {
-      download_url: link.uri,
-      file_id: `file_execmcp_${link.uri.split('/artifacts/')[1].split('/')[0]}`,
-      mime_type: link.mimeType,
-      file_name: link.name
-    });
-
     const head = await fetch(link.uri, { method: 'HEAD' });
     assert.equal(head.status, 200);
     assert.equal(Number(head.headers.get('content-length')), bytes.length);

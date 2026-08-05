@@ -26,13 +26,6 @@ export interface ImportedArtifact {
   verified: true;
 }
 
-export interface ArtifactFileReference {
-  download_url: string;
-  file_id: string;
-  mime_type: string;
-  file_name: string;
-}
-
 export interface ExportedArtifact {
   path: string;
   bytes: number;
@@ -42,7 +35,6 @@ export interface ExportedArtifact {
   download_url: string;
   expires_at: string;
   downloads_remaining: number;
-  file_uri: ArtifactFileReference;
 }
 
 interface ArtifactRecord extends ExportedArtifact {
@@ -175,12 +167,6 @@ export class ArtifactTransferManager {
         const mimeType = detectMimeType(fileName);
         const expiresAtMs = Date.now() + this.config.artifactDownloadTtlSeconds * 1000;
         const url = `${this.config.artifactPublicBaseUrl}/artifacts/${token}/${encodeURIComponent(fileName)}`;
-        const fileReference: ArtifactFileReference = {
-          download_url: url,
-          file_id: `file_execmcp_${token}`,
-          mime_type: mimeType,
-          file_name: fileName
-        };
         const record: ArtifactRecord = {
           token,
           local_path: finalPath,
@@ -194,8 +180,7 @@ export class ArtifactTransferManager {
           expires_at_ms: expiresAtMs,
           downloads: 0,
           max_downloads: this.config.artifactMaxDownloads,
-          downloads_remaining: this.config.artifactMaxDownloads,
-          file_uri: fileReference
+          downloads_remaining: this.config.artifactMaxDownloads
         };
         this.records.set(token, record);
         return publicRecord(record);
@@ -210,7 +195,7 @@ export class ArtifactTransferManager {
 
   async embedExportedArtifact(result: ExportedArtifact): Promise<{ uri: string; mimeType: string; blob: string } | null> {
     if (result.bytes > this.config.artifactEmbedMaxBytes) return null;
-    const token = result.file_uri.file_id.replace(/^file_execmcp_/, '');
+    const token = artifactTokenFromUrl(result.download_url);
     const record = this.records.get(token);
     if (!record || record.expires_at_ms <= Date.now()) return null;
     const info = await stat(record.local_path);
@@ -321,6 +306,13 @@ export class ArtifactTransferManager {
   }
 }
 
+function artifactTokenFromUrl(value: string): string {
+  const parsed = new URL(value);
+  const match = /^\/artifacts\/([a-f0-9]{64})(?:\/|$)/.exec(parsed.pathname);
+  if (!match) throw new ArtifactTransferError('invalid_artifact_url', 'exported artifact URL does not contain a valid token');
+  return match[1] as string;
+}
+
 function publicRecord(record: ArtifactRecord): ExportedArtifact {
   return {
     path: record.path,
@@ -330,8 +322,7 @@ function publicRecord(record: ArtifactRecord): ExportedArtifact {
     file_name: record.file_name,
     download_url: record.download_url,
     expires_at: record.expires_at,
-    downloads_remaining: record.downloads_remaining,
-    file_uri: record.file_uri
+    downloads_remaining: record.downloads_remaining
   };
 }
 

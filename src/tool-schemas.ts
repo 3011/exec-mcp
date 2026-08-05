@@ -204,20 +204,9 @@ function exportRemoteFileToolSchema() {
         file_name: { type: 'string' },
         download_url: { type: 'string' },
         expires_at: { type: 'string' },
-        downloads_remaining: { type: 'integer', minimum: 0 },
-        file_uri: {
-          type: 'object',
-          properties: {
-            download_url: { type: 'string' },
-            file_id: { type: 'string' },
-            mime_type: { type: 'string' },
-            file_name: { type: 'string' }
-          },
-          required: ['download_url', 'file_id', 'mime_type', 'file_name'],
-          additionalProperties: false
-        }
+        downloads_remaining: { type: 'integer', minimum: 0 }
       },
-      required: ['path', 'bytes', 'sha256', 'mime_type', 'file_name', 'download_url', 'expires_at', 'downloads_remaining', 'file_uri'],
+      required: ['path', 'bytes', 'sha256', 'mime_type', 'file_name', 'download_url', 'expires_at', 'downloads_remaining'],
       additionalProperties: false
     },
     annotations: {
