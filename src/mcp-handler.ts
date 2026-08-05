@@ -187,7 +187,7 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
       }
       if (name === 'export_remote_file') {
         const result = await artifacts.exportRemoteFile(args, context.signal);
-        return toolResultWithContent(id, [
+        const content: ToolContent[] = [
           { type: 'text', text: JSON.stringify(result, null, 2) },
           {
             type: 'resource_link',
@@ -198,7 +198,16 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
             size: result.bytes,
             annotations: { audience: ['user', 'assistant'], priority: 1 }
           }
-        ], false, result);
+        ];
+        const embedded = await artifacts.embedExportedArtifact(result);
+        if (embedded) {
+          content.push({
+            type: 'resource',
+            resource: embedded,
+            annotations: { audience: ['assistant'], priority: 1 }
+          });
+        }
+        return toolResultWithContent(id, content, false, result);
       }
       return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {

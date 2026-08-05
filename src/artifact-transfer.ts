@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, unlink } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -194,6 +194,26 @@ export class ArtifactTransferManager {
         guard.close();
       }
     });
+  }
+
+  async embedExportedArtifact(result: ExportedArtifact): Promise<{ uri: string; mimeType: string; blob: string } | null> {
+    if (result.bytes > this.config.artifactEmbedMaxBytes) return null;
+    const record = [...this.records.values()].find((candidate) =>
+      candidate.download_url === result.download_url
+      && candidate.sha256 === result.sha256
+      && candidate.bytes === result.bytes
+    );
+    if (!record || record.expires_at_ms <= Date.now()) return null;
+    const info = await stat(record.local_path);
+    if (!info.isFile() || info.size !== record.bytes || info.size > this.config.artifactEmbedMaxBytes) {
+      throw new ArtifactTransferError('artifact_embed_validation_failed', 'exported artifact changed before embedding');
+    }
+    const bytes = await readFile(record.local_path);
+    return {
+      uri: record.download_url,
+      mimeType: record.mime_type,
+      blob: bytes.toString('base64')
+    };
   }
 
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
