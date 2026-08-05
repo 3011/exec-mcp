@@ -35,6 +35,7 @@ export interface ExportedArtifact {
   download_url: string;
   expires_at: string;
   downloads_remaining: number;
+  embedded: boolean;
 }
 
 interface ArtifactRecord extends ExportedArtifact {
@@ -183,7 +184,8 @@ export class ArtifactTransferManager {
           expires_at_ms: expiresAtMs,
           downloads: 0,
           max_downloads: this.config.artifactMaxDownloads,
-          downloads_remaining: this.config.artifactMaxDownloads
+          downloads_remaining: this.config.artifactMaxDownloads,
+          embedded: remote.bytes <= this.config.artifactEmbedMaxBytes
         };
         this.records.set(token, record);
         return publicRecord(record);
@@ -331,7 +333,8 @@ function publicRecord(record: ArtifactRecord): ExportedArtifact {
     file_name: record.file_name,
     download_url: record.download_url,
     expires_at: record.expires_at,
-    downloads_remaining: record.downloads_remaining
+    downloads_remaining: record.downloads_remaining,
+    embedded: record.embedded
   };
 }
 

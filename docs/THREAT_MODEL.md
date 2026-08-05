@@ -24,7 +24,7 @@ The gateway accepts arbitrary shell commands and operator-wide lifecycle control
 
 ### Public artifact data plane
 
-When `export_remote_file` is enabled, only `/artifacts/<256-bit-token>/...` is intentionally reachable through a public HTTPS ingress. The MCP, exec, metrics, and health routes remain private. The random URL is a temporary bearer capability and must not be logged, indexed, or forwarded to untrusted parties.
+When `export_remote_file` is enabled, only capability-protected artifact routes are intentionally reachable through a public HTTPS ingress: `/artifacts/<256-bit-token>/...`, and optionally `/tool-container/<high-entropy-token>/current` when the fixed tool bridge is configured. The MCP, exec, metrics, and health routes remain private. These URLs are bearer capabilities and must not be logged, indexed, or forwarded to untrusted parties.
 
 ### Gateway to remote host
 
@@ -32,7 +32,7 @@ The gateway authenticates with an SSH key and trusts the server identity establi
 
 ### Remote shell and filesystem
 
-`ALLOWED_CWDS` limits accepted working directories and file-tool paths, but it is not a sandbox. Commands can access anything allowed by the remote account, including paths outside the cwd allowlist through ordinary shell arguments.
+`ALLOWED_CWDS` limits accepted command working directories and artifact source/destination paths, but it is not a sandbox. Commands can access anything allowed by the remote account, including paths outside the cwd allowlist through ordinary shell arguments.
 
 ## Assumptions
 
@@ -103,7 +103,7 @@ The gateway authenticates with an SSH key and trusts the server identity establi
 
 **Impact:** overwrite, exfiltration, SSRF, disk consumption, capability-link leakage, or unsafe downstream processing.
 
-**Controls:** trusted callers only; optional import-host allowlist; HTTPS-only import by default; redirect revalidation; path allowlist and realpath checks; same-directory temporary files; symlink rejection; regular-file export requirement; size, concurrency, and timeout limits; SHA-256 verification; atomic commit; 256-bit export tokens; short TTL; bounded GET count; `Cache-Control: no-store`; and a public ingress restricted to `/artifacts/`.
+**Controls:** trusted callers only; optional import-host allowlist; HTTPS-only import by default; redirect revalidation; path allowlist and realpath checks; same-directory temporary files; symlink rejection; regular-file export requirement; size, concurrency, and timeout limits; SHA-256 verification; atomic commit; 256-bit export tokens; short TTL; bounded GET count; `Cache-Control: no-store`; and a public ingress restricted to the configured artifact data-plane paths (`/artifacts/` and, only when enabled, `/tool-container/`).
 
 Identical import retries are idempotent. Different bytes cannot replace an existing destination unless the caller explicitly sets `overwrite=true`.
 
@@ -124,7 +124,7 @@ Identical import retries are idempotent. Different bytes cannot replace an exist
 ## Deployment checklist
 
 - [ ] `/mcp`, `/exec`, `/metrics`, and `/healthz` are not directly internet-accessible.
-- [ ] If artifact export is enabled, the public ingress routes only `/artifacts/` and uses valid HTTPS.
+- [ ] If artifact export is enabled, the public ingress routes only `/artifacts/` and, when explicitly configured, `/tool-container/`; all use valid HTTPS.
 - [ ] Artifact capability URLs are excluded from access logs where possible and are never emitted in lifecycle logs.
 - [ ] Authentication and encrypted transport exist before the gateway.
 - [ ] Network access is restricted to intended clients.

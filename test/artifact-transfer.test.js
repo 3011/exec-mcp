@@ -67,7 +67,8 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     PORT: '0',
     ALLOWED_CWDS: root,
     DEFAULT_CWD: root,
-    ARTIFACT_MAX_BYTES: String(1024 * 1024),
+    ARTIFACT_MAX_BYTES: String(2 * 1024 * 1024),
+    ARTIFACT_EMBED_MAX_BYTES: String(512 * 1024),
     ARTIFACT_TOOL_BRIDGE_TOKEN: 'tool_bridge_test_token_0123456789abcdef',
     ARTIFACT_SPOOL_DIR: spool,
     ARTIFACT_PUBLIC_BASE_URL: 'http://placeholder.invalid',
@@ -143,6 +144,7 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(exported.result.structuredContent.bytes, bytes.length);
     assert.equal(exported.result.structuredContent.sha256, expectedSha);
     assert.equal(exported.result.structuredContent.mime_type, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    assert.equal(exported.result.structuredContent.embedded, true);
     assert.deepEqual(exported.result.content.map((item) => item.type), ['text', 'resource_link', 'resource']);
     assert.equal(exported.result.content[1].uri, exported.result.structuredContent.download_url);
     assert.equal(exported.result.content[1].name, 'result ü.pptx');
@@ -164,6 +166,14 @@ test('ChatGPT file references and resource links transfer random binary bytes in
     assert.equal(ranged.status, 206);
     assert.equal(ranged.headers.get('content-range'), `bytes 100-199/${bytes.length}`);
     assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), bytes.subarray(100, 200));
+
+    const linkOnlyBytes = randomBytes(600 * 1024);
+    await writeFile(join(root, 'link-only.bin'), linkOnlyBytes);
+    const linkOnly = await mcpCall(base, 5, 'export_remote_file', { path: 'link-only.bin' });
+    assert.equal(linkOnly.result.isError, false);
+    assert.equal(linkOnly.result.structuredContent.bytes, linkOnlyBytes.length);
+    assert.equal(linkOnly.result.structuredContent.embedded, false);
+    assert.deepEqual(linkOnly.result.content.map((item) => item.type), ['text', 'resource_link']);
   } finally {
     instance.runner.registry.close();
     await new Promise((resolve) => instance.server.close(resolve));

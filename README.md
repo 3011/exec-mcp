@@ -36,10 +36,8 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 | `list_active_execs` | List active executions without consuming an execution slot. |
 | `get_exec_status` | Read an active execution or a record from bounded recent history. |
 | `cancel_exec` | Idempotently request cancellation of an active execution. |
-| `download_file` | Read one small allowed remote file and return base64-encoded bytes. |
-| `upload_file` | Write or append one small base64-encoded file for compatibility. |
 | `import_chatgpt_file` | Import a current ChatGPT file reference into the remote environment with SHA-256 verification and atomic commit. |
-| `export_remote_file` | Export a remote file as both a ChatGPT file reference and an MCP HTTPS `resource_link`. |
+| `export_remote_file` | Export a verified remote file as an MCP `resource_link`; files up to the embed limit also become embedded resources that compatible ChatGPT hosts place in `/mnt/data`. |
 
 The control-plane tools are operator-wide. They assume one trusted tenant and are intentionally available even when command capacity is full.
 
@@ -162,10 +160,9 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 | `RING_BUFFER_BYTES` | `65536` | Retained tail capacity per stream. |
 | `HEARTBEAT_SECONDS` | `15` | SSE heartbeat interval. |
 | `KILL_GRACE_SECONDS` | `5` | Delay between termination and forced kill. |
-| `FILE_MAX_DOWNLOAD_BYTES` | `10485760` | Maximum downloaded file size. |
-| `FILE_MAX_UPLOAD_BYTES` | `10485760` | Maximum decoded upload size. |
 | `MCP_MAX_REQUEST_BYTES` | `16777216` | Maximum MCP request body size. |
 | `ARTIFACT_MAX_BYTES` | `268435456` | Maximum imported or exported artifact size. |
+| `ARTIFACT_EMBED_MAX_BYTES` | `1048576` | Maximum export size included as one MCP embedded resource for direct compatible-host ingestion. Larger files return only the HTTPS resource link. |
 | `ARTIFACT_MAX_CONCURRENT_TRANSFERS` | `2` | Maximum concurrent artifact imports and exports. |
 | `ARTIFACT_SPOOL_DIR` | `/tmp/exec-mcp-artifacts` | Local temporary/cache directory for artifact transfer. |
 | `ARTIFACT_PUBLIC_BASE_URL` | empty | Public HTTPS origin used to build exported-file resource links. Required for `export_remote_file`. |
@@ -188,25 +185,24 @@ Use `import_chatgpt_file` for files attached to or generated in the current Chat
 
 Use `export_remote_file` for the reverse direction. It streams the remote file, verifies SHA-256, and returns:
 
+- structured metadata including `bytes`, `sha256`, `file_name`, `download_url`, and `embedded`;
 - a standard MCP `resource_link` with a short-lived HTTPS capability URL; and
-- for files up to `ARTIFACT_EMBED_MAX_BYTES`, an MCP embedded binary resource so compatible hosts can create a real backing file for tool-container use.
+- when `embedded=true`, an MCP embedded binary resource so compatible hosts can create a real backing file for tool-container use.
 
-Do not fabricate an OpenAI `file_id` for exported files. Only the ChatGPT host can mint a real file ID when it ingests the embedded resource.
+Files above `ARTIFACT_EMBED_MAX_BYTES` return `embedded=false`; automatic large-file chunking is not yet a first-class MCP tool. Do not fabricate an OpenAI `file_id` for exported files. Only the ChatGPT host can mint a real file ID when it ingests the embedded resource.
 
-The Secure MCP Tunnel transports MCP JSON-RPC only. If the MCP endpoint stays private behind the tunnel, expose only `/artifacts/` through a separate HTTPS ingress or object store. Do not expose `/mcp`, `/exec`, `/metrics`, or `/healthz` on the artifact hostname. Capability URLs contain 256 bits of randomness, expire, and have a bounded download count, but they must still be treated as bearer secrets.
-
-The legacy `upload_file` and `download_file` tools remain available for small compatibility cases. They should not be used for presentations, documents, archives, or other non-trivial binary artifacts.
+The Secure MCP Tunnel transports MCP JSON-RPC only. If the MCP endpoint stays private behind the tunnel, expose only the artifact data-plane routes through a separate HTTPS ingress or object store: `/artifacts/<token>/...` for per-export capabilities and, when `ARTIFACT_TOOL_BRIDGE_TOKEN` is configured, `/tool-container/<token>/current` for the fixed bridge. Do not expose `/mcp`, `/exec`, `/metrics`, or `/healthz` on the artifact hostname. Capability URLs contain 256 bits of randomness, expire, and have a bounded download count, but they must still be treated as bearer secrets.
 
 ## Development
 
 ```bash
-npm test             # strict build and 57 tests
+npm test             # strict build and regression tests
 npm run build        # strict type-check and compile to dist/
 npm run test:memory  # bounded-output and RSS smoke test
 npm run validate     # tests, HTTP/SSE, and memory smoke tests
 ```
 
-Runtime source is organized by responsibility: `server.ts` for HTTP composition and lifecycle, `mcp-handler.ts` for JSON-RPC dispatch, `tool-schemas.ts` for stable schemas, `file-tools.ts` for transfer operations, and `metrics.ts` for Prometheus rendering.
+Runtime source is organized by responsibility: `server.ts` for HTTP composition and lifecycle, `mcp-handler.ts` for JSON-RPC dispatch, `tool-schemas.ts` for stable schemas, `artifact-transfer.ts` for verified bidirectional file transfer, and `metrics.ts` for Prometheus rendering.
 
 CI runs the test suite and builds the container. CodeQL and Dependabot configuration are included in the repository.
 

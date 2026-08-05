@@ -27,7 +27,6 @@ The source is split by responsibility without adding runtime frameworks:
 - `server.ts` composes dependencies and owns HTTP/SSE startup, routing, and shutdown;
 - `mcp-handler.ts` owns MCP request tracking and JSON-RPC method dispatch;
 - `tool-schemas.ts` contains the stable MCP tool schema objects;
-- `file-tools.ts` owns legacy small-file base64 upload/download handling;
 - `artifact-transfer.ts` owns ChatGPT file references, binary SSH transfer, SHA-256 verification, atomic commits, and short-lived export resources;
 - `metrics.ts` renders Prometheus text from the existing runner and registry state.
 
@@ -83,8 +82,6 @@ Exposed tools:
 - `list_active_execs`
 - `get_exec_status`
 - `cancel_exec`
-- `download_file`
-- `upload_file`
 - `import_chatgpt_file`
 - `export_remote_file`
 
@@ -150,19 +147,17 @@ This avoids claiming safe capacity while an execution has an unresolved local tr
 
 Two transfer classes are intentionally separated.
 
-Legacy `upload_file` and `download_file` embed base64 in MCP JSON and remain only for small compatibility cases. Their encoded and decoded sizes are bounded.
-
-Artifact tools keep file bytes out of model arguments and results:
+Artifact tools keep file bytes out of model-authored arguments and ordinary text results. Small exports may include a protocol-level MCP embedded resource that the host ingests directly without model copying:
 
 - `import_chatgpt_file` receives a ChatGPT-authorized temporary file reference, downloads to a bounded local spool, computes SHA-256, streams raw bytes through SSH stdin, writes a same-directory temporary file remotely, fsyncs it, and atomically commits it.
 - A retry to an existing destination succeeds only when size and SHA-256 are identical; different content requires explicit `overwrite=true`.
 - `export_remote_file` streams raw remote bytes through SSH stdout, verifies size and SHA-256 locally, and stores an immutable temporary object behind a 256-bit capability token.
-- Export results contain both a ChatGPT file-reference object and an MCP HTTPS `resource_link`.
+- Export results always contain structured metadata, including an explicit `embedded` flag, and an MCP HTTPS `resource_link`. Files no larger than `ARTIFACT_EMBED_MAX_BYTES` also contain an MCP embedded binary resource. Compatible ChatGPT hosts ingest that resource into the current working container while preserving the requested file name.
 - Capability URLs expire and have a bounded GET count. HEAD requests and byte ranges are supported.
 - Relative remote paths resolve from `DEFAULT_CWD`; real paths and parents must remain inside `ALLOWED_CWDS`; symlinks and non-regular files are rejected.
 - Artifact size, concurrency, and end-to-end duration are bounded independently from command execution.
 
-Secure MCP Tunnel carries MCP JSON-RPC, not arbitrary artifact GET requests. A deployment using the tunnel therefore exposes only the capability-token `/artifacts/` path through a separate HTTPS data-plane ingress, while keeping command and MCP routes private.
+Secure MCP Tunnel carries MCP JSON-RPC, not arbitrary artifact GET requests. A deployment using the tunnel therefore exposes only the capability-protected artifact data-plane paths through a separate HTTPS ingress: `/artifacts/<token>/...`, plus `/tool-container/<token>/current` when the fixed bridge is configured. Command, MCP, metrics, and health routes remain private.
 
 ## Security boundaries
 

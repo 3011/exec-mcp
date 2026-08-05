@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the legacy `download_file` and `upload_file` MCP tools and their JSON `data_base64` transport path.
+
+### Changed
+
+- Documented `export_remote_file` as metadata plus `resource_link`, with a directly ingestible MCP embedded resource for files up to the configured embed ceiling.
+- Reduced the default embedded-resource ceiling to the validated 1 MiB production-safe value.
+- Tightened titles, descriptions, annotations, and output schemas for all remaining MCP tools.
+
 ## [0.4.0] - 2026-08-04
 
 ### Added

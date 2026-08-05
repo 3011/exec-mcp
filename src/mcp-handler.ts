@@ -3,7 +3,6 @@ import { ExecRejectedError, ExecRunner } from './exec-runner.js';
 import type { ExecEvent, ExecSummary } from './exec-runner.js';
 import type { ExecutionRecord } from './exec-registry.js';
 import { TOOL_SCHEMAS } from './tool-schemas.js';
-import { downloadFileTool, FileToolError, uploadFileTool } from './file-tools.js';
 import { ArtifactTransferError, ArtifactTransferManager } from './artifact-transfer.js';
 
 const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version;
@@ -173,14 +172,6 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
         const result = runner.cancel(requireExecId(args));
         return toolResult(id, JSON.stringify(result, null, 2), result.result === 'exec_not_found', result);
       }
-      if (name === 'download_file') {
-        const result = await downloadFileTool(args, runner.config);
-        return toolResult(id, JSON.stringify(result, null, 2), false, result);
-      }
-      if (name === 'upload_file') {
-        const result = await uploadFileTool(args, runner.config);
-        return toolResult(id, JSON.stringify(result, null, 2), false, result);
-      }
       if (name === 'import_chatgpt_file') {
         const result = await artifacts.importChatgptFile(args, context.signal);
         return toolResult(id, JSON.stringify(result, null, 2), false, result);
@@ -211,7 +202,7 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
       }
       return jsonError(id, -32602, `Unknown tool: ${name}`);
     } catch (err) {
-      const code = err instanceof ExecRejectedError || err instanceof FileToolError || err instanceof ArtifactTransferError || errorCode(err) === 'duplicate_request_id'
+      const code = err instanceof ExecRejectedError || err instanceof ArtifactTransferError || errorCode(err) === 'duplicate_request_id'
         ? errorCode(err) || 'internal_error'
         : 'internal_error';
       const details = { code, ...errorDetails(err) };
