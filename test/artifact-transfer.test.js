@@ -162,10 +162,10 @@ test('ChatGPT file references and embedded resources transfer random binary byte
   }
 });
 
-test('embedded-only export hard-caps at 4 MiB and rejects the next byte', async () => {
+test('embedded-only export hard-caps at 1.45 MB and rejects the next byte', async () => {
   const root = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-root-'));
   const spool = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-spool-'));
-  const limit = 4 * 1024 * 1024;
+  const limit = 1_450_000;
   const exactBytes = Buffer.alloc(limit, 0x5a);
   const expectedSha = sha256(exactBytes);
   const config = parseConfig({
@@ -185,8 +185,8 @@ test('embedded-only export hard-caps at 4 MiB and rejects the next byte', async 
   const base = await listen(instance.server);
 
   try {
-    await writeFile(join(root, 'exact-4m.bin'), exactBytes);
-    const exact = await mcpCall(base, 100, 'export_remote_file', { path: 'exact-4m.bin' });
+    await writeFile(join(root, 'exact-1.45mb.bin'), exactBytes);
+    const exact = await mcpCall(base, 100, 'export_remote_file', { path: 'exact-1.45mb.bin' });
     assert.equal(exact.result.isError, false);
     assert.equal(exact.result.structuredContent.bytes, limit);
     assert.equal(exact.result.structuredContent.sha256, expectedSha);
@@ -197,8 +197,8 @@ test('embedded-only export hard-caps at 4 MiB and rejects the next byte', async 
     assert.equal(materialized.length, limit);
     assert.equal(sha256(materialized), expectedSha);
 
-    await writeFile(join(root, 'over-4m.bin'), Buffer.alloc(limit + 1, 0x41));
-    const over = await mcpCall(base, 101, 'export_remote_file', { path: 'over-4m.bin' });
+    await writeFile(join(root, 'over-1.45mb.bin'), Buffer.alloc(limit + 1, 0x41));
+    const over = await mcpCall(base, 101, 'export_remote_file', { path: 'over-1.45mb.bin' });
     assert.equal(over.result.isError, true);
     assert.equal(over.result.structuredContent.code, 'file_too_large');
     assert.deepEqual(over.result.content.map((item) => item.type), ['text']);

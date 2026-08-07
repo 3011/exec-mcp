@@ -160,7 +160,7 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 | `KILL_GRACE_SECONDS` | `5` | Delay between termination and forced kill. |
 | `MCP_MAX_REQUEST_BYTES` | `16777216` | Maximum MCP request body size. |
 | `ARTIFACT_MAX_BYTES` | `268435456` | Absolute artifact size ceiling. Imports may use the full value; exports are additionally capped by `ARTIFACT_EMBED_MAX_BYTES`. |
-| `ARTIFACT_EMBED_MAX_BYTES` | `4194304` | Configurable remote-export ceiling, hard-capped at 4 MiB (4,194,304 bytes). Lower values are allowed; larger files are rejected with no URL fallback. |
+| `ARTIFACT_EMBED_MAX_BYTES` | `1450000` | Configurable remote-export ceiling, hard-capped at 1.45 MB (1,450,000 bytes). Lower values are allowed; larger files are rejected with no URL fallback. |
 | `ARTIFACT_MAX_CONCURRENT_TRANSFERS` | `2` | Maximum concurrent artifact imports and exports. |
 | `ARTIFACT_SPOOL_DIR` | `/tmp/exec-mcp-artifacts` | Local temporary/cache directory for artifact transfer. |
 | `ARTIFACT_EMBED_URI_BASE` | `https://exec-mcp.invalid/embedded` | Identifier base placed in embedded-resource URIs. It is metadata only; the host receives bytes from the MCP `blob` field and must not fetch this URI. |
@@ -180,7 +180,7 @@ Use `import_chatgpt_file` for files attached to or generated in the current Chat
 
 Use `export_remote_file` for the reverse direction. It streams the remote file into a bounded local spool, verifies size and SHA-256, reads the verified bytes, and returns exactly one MCP embedded binary resource plus structured metadata (`bytes`, `sha256`, `file_name`, `embedded=true`, and `delivery_mode=embedded_resource`). A compatible ChatGPT host can materialize that resource as a real file in `/mnt/data` while preserving `file_name`.
 
-Exports larger than `ARTIFACT_EMBED_MAX_BYTES` are rejected with `file_too_large`; the service deliberately provides no `resource_link`, public download URL, or large-file fallback. The embedded `blob` is Base64 at the MCP protocol layer, so the practical ceiling must account for Base64 expansion, JSON framing, tunnel limits, host materialization limits, and gateway memory. The hard maximum and default are 4 MiB (4,194,304 bytes). This value is covered by backend boundary tests and was selected from end-to-end ChatGPT host materialization tests: 4 MiB completed successfully, while a standalone 8 MiB export timed out at the platform ingestion/materialization stage.
+Exports larger than `ARTIFACT_EMBED_MAX_BYTES` are rejected with `file_too_large`; the service deliberately provides no `resource_link`, public download URL, or large-file fallback. The embedded `blob` is Base64 at the MCP protocol layer, so the practical ceiling must account for Base64 expansion, JSON framing, tunnel limits, host materialization limits, and gateway memory. The hard maximum and default are 1.45 MB (1,450,000 bytes). This conservative ceiling is covered by backend boundary tests and intentionally leaves margin below the platform-sensitive range observed during ChatGPT host ingestion/materialization testing.
 
 Secure MCP Tunnel carries the embedded bytes inside MCP JSON-RPC, so remote-to-ChatGPT export requires no public artifact ingress. Keep `/mcp`, `/exec`, `/metrics`, and `/healthz` private behind the authenticated transport.
 

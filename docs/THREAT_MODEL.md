@@ -120,7 +120,7 @@ Identical import retries are idempotent. Different bytes cannot replace an exist
 
 - [ ] `/mcp`, `/exec`, `/metrics`, and `/healthz` are not directly internet-accessible.
 - [ ] No public artifact export ingress exists; embedded export travels only through the authenticated MCP transport.
-- [ ] Remote embedded exports are hard-capped at 4 MiB (4,194,304 bytes); any lower `ARTIFACT_EMBED_MAX_BYTES` override is intentional and documented. The 4 MiB cap is based on end-to-end host materialization tests and leaves headroom below the observed standalone 8 MiB timeout boundary.
+- [ ] Remote embedded exports are hard-capped at 1.45 MB (1,450,000 bytes); any lower `ARTIFACT_EMBED_MAX_BYTES` override is intentional and documented. The 1.45 MB cap is a conservative operational ceiling chosen to stay below the observed platform-sensitive range for embedded MCP resources.
 - [ ] Authentication and encrypted transport exist before the gateway.
 - [ ] Network access is restricted to intended clients.
 - [ ] The SSH user is dedicated and non-root where possible.

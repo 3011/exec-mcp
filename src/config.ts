@@ -1,4 +1,4 @@
-export const ARTIFACT_EMBED_HARD_MAX_BYTES = 4 * 1024 * 1024;
+export const ARTIFACT_EMBED_HARD_MAX_BYTES = 1_450_000;
 
 export interface RemoteConfig {
   bin: string;
