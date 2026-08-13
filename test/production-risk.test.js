@@ -215,3 +215,32 @@ test('manual cancel kills the whole async process group including background chi
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('manual cancel prevents a detached background marker from firing after transport isolation', async () => {
+  const marker = `/tmp/exec-mcp-cancel-marker-${process.pid}-${Date.now()}`;
+  const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '5', MAX_TIMEOUT_SECONDS: '6' });
+  try {
+    const started = runner.start({
+      command: `sh -c '(sleep 2; touch ${marker}) & wait'`,
+      cwd: '/tmp',
+      timeout_seconds: 5,
+      label: 'cancel-marker-regression'
+    });
+    const runningDeadline = Date.now() + 2000;
+    while (Date.now() < runningDeadline) {
+      const state = await runner.getStatus(started.exec_id);
+      if (state.found && state.task.status === 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(runner.cancel(started.exec_id).result, 'accepted');
+    const final = await runner.getStatus(started.exec_id, { waitSeconds: 3 });
+    assert.equal(final.found, true);
+    assert.equal(final.task.status, 'cancelled');
+    assert.equal(final.task.remote_exit_confirmed, true);
+    await new Promise((resolve) => setTimeout(resolve, 2300));
+    assert.equal(existsSync(marker), false, 'cancelled remote process group must not create marker later');
+  } finally {
+    runner.close();
+    await rm(marker, { force: true });
+  }
+});

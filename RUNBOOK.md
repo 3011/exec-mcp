@@ -102,7 +102,7 @@ Read the structured summary:
 
 ### Command appears to survive cancellation
 
-Cancellation terminates the local SSH transport process group. A remote program that deliberately daemonizes or detaches may survive. Inspect and terminate it using remote operating-system controls, then reduce the SSH account's privileges or command capabilities to prevent recurrence.
+Cancellation terminates the isolated remote command process group and reports `remote_exit_confirmed`. If a job ends with `failure_reason=remote_termination_unconfirmed`, inspect the remote host before retrying. A program that deliberately creates a new session/process group can still escape the normal job boundary; constrain such behavior with remote-host policy and least privilege.
 
 ## Metrics
 

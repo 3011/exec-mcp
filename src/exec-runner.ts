@@ -365,6 +365,8 @@ export class ExecRunner {
     let disconnectCounted = false;
     let heartbeat: NodeJS.Timeout | null = null;
     let sigkillTimer: NodeJS.Timeout | null = null;
+    let abortFallbackTimer: NodeJS.Timeout | null = null;
+    let remoteAbortPromise: Promise<boolean> | null = null;
     const acceptedAt = new Date(rec.createdAt);
     const tailBufferBytes = Math.min(this.config.ringBufferBytes, req.maxOutputBytes);
     const stdoutTail = new RingBuffer(tailBufferBytes);
@@ -398,6 +400,20 @@ export class ExecRunner {
       sigkillTimer.unref?.();
     };
 
+    const beginRemoteAbort = (): void => {
+      if (!child || childExited) return;
+      if (!remoteAbortPromise) remoteAbortPromise = requestRemoteCancellation(this.config, execId, this.config.killGraceSeconds);
+      if (!abortFallbackTimer) {
+        abortFallbackTimer = setTimeout(() => {
+          if (childExited) return;
+          this.registry.markKilling(rec.id);
+          killGroup('SIGTERM');
+          scheduleSigkill(this.config.killGraceSeconds, timedOut ? 'local_sigkill_fallback' : 'sigkill');
+        }, (this.config.killGraceSeconds + 6) * 1000);
+        abortFallbackTimer.unref?.();
+      }
+    };
+
     const onRegistryAbort = (): void => {
       const reasonCode = abortReasonCode(rec.controller.signal.reason);
       this.bumpMap(this.metrics.abortRequestedTotal, reasonCode);
@@ -409,16 +425,14 @@ export class ExecRunner {
           this.metrics.timeoutTotal++;
         }
         send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'remote_watchdog', reason: reasonCode });
-        if (reasonCode === 'reaper_grace_exceeded') killGroup('SIGTERM');
-        scheduleSigkill(this.config.killGraceSeconds + 2, 'local_sigkill_fallback');
+        beginRemoteAbort();
         return;
       }
       if (reasonCode !== 'executor_shutdown' && !disconnectCounted) {
         disconnectCounted = true;
         this.metrics.streamDisconnectTotal++;
       }
-      killGroup('SIGTERM');
-      scheduleSigkill();
+      beginRemoteAbort();
     };
 
     try {
@@ -428,7 +442,7 @@ export class ExecRunner {
         throw new ExecRejectedError('request_cancelled', abortReasonCode(rec.controller.signal.reason));
       }
 
-      const spawned = spawnCommand(this.config, req);
+      const spawned = spawnCommand(this.config, req, execId);
       child = spawned.child;
       req.env = {};
       this.registry.markTransportStarted(rec.id, child.pid);
@@ -535,14 +549,26 @@ export class ExecRunner {
     } finally {
       if (heartbeat) clearInterval(heartbeat);
       if (sigkillTimer) clearTimeout(sigkillTimer);
+      if (abortFallbackTimer) clearTimeout(abortFallbackTimer);
       rec.controller.signal.removeEventListener('abort', onRegistryAbort);
+      let remoteExitConfirmed: boolean | null = null;
+      if (rec.abortReason) {
+        remoteExitConfirmed = child ? (remoteAbortPromise ? await remoteAbortPromise : false) : true;
+      } else if (child && childExited && !spawnFailed) {
+        remoteExitConfirmed = true;
+      }
       const finalizeInput = {
         exitCode: finalSummary?.code ?? null,
         signal: finalSummary?.signal ?? null,
         transportExitConfirmed: child ? childExited : true,
+        remoteExitConfirmed,
         spawnFailed
-      } as { exitCode: number | null; signal: NodeJS.Signals | null; transportExitConfirmed: boolean; spawnFailed: boolean; failureReason?: string };
+      } as { exitCode: number | null; signal: NodeJS.Signals | null; transportExitConfirmed: boolean; remoteExitConfirmed: boolean | null; spawnFailed: boolean; finalState?: FinalExecutionState; failureReason?: string };
       if (rec.abortReason === 'executor_shutdown') finalizeInput.failureReason = 'executor_restarted';
+      if (rec.abortReason && remoteExitConfirmed === false) {
+        finalizeInput.finalState = 'failed';
+        finalizeInput.failureReason = 'remote_termination_unconfirmed';
+      }
       const finalized = this.registry.finalize(rec.id, finalizeInput);
       this.recordFinalization(job, finalized.record);
     }
@@ -843,8 +869,8 @@ function abortReasonCode(reason: unknown): string {
   return String(reason || 'aborted');
 }
 
-function spawnCommand(config: ExecMcpConfig, req: ValidatedExecRequest): { child: ChildProcessWithoutNullStreams; stdin: string } {
-  return spawnRemoteShell(config, buildRemoteScript(req));
+function spawnCommand(config: ExecMcpConfig, req: ValidatedExecRequest, execId: string): { child: ChildProcessWithoutNullStreams; stdin: string } {
+  return spawnRemoteShell(config, buildRemoteScript(req, execId));
 }
 
 export function spawnRemoteProcess(config: ExecMcpConfig, remoteCommand: readonly string[]): ChildProcessWithoutNullStreams {
@@ -876,14 +902,22 @@ export function spawnRemoteShell(config: ExecMcpConfig, stdin: string): { child:
   return { child: spawnRemoteProcess(config, ['/bin/sh', '-s']), stdin };
 }
 
-function buildRemoteScript(req: ValidatedExecRequest): string {
+function buildRemoteScript(req: ValidatedExecRequest, execId: string): string {
   const lines: string[] = [];
   lines.push('set -eu');
   lines.push(`CWD_B64='${b64(req.cwd)}'`);
   lines.push(`CMD_B64='${b64(req.command)}'`);
   lines.push(`TIMEOUT_SECONDS='${Number.parseInt(String(req.timeoutSeconds), 10)}'`);
   lines.push(`KILL_GRACE_SECONDS='${Math.max(1, Number.parseInt(String(req.killGraceSeconds), 10) || 1)}'`);
+  lines.push(`CONTROL_DIR_B64='${b64(remoteControlDir(execId))}'`);
   lines.push('CWD=$(printf %s "$CWD_B64" | base64 -d)');
+  lines.push('CONTROL_DIR=$(printf %s "$CONTROL_DIR_B64" | base64 -d)');
+  lines.push('CANCEL_FILE="$CONTROL_DIR/cancel"');
+  lines.push('DONE_FILE="$CONTROL_DIR/done"');
+  lines.push('PGID_FILE="$CONTROL_DIR/pgid"');
+  lines.push('umask 077');
+  lines.push('mkdir -p "$CONTROL_DIR"');
+  lines.push('rm -f "$DONE_FILE" "$PGID_FILE"');
   lines.push('CMD=$(printf %s "$CMD_B64" | base64 -d)');
   lines.push('if ! command -v setsid >/dev/null 2>&1; then echo "remote_environment_error: setsid is required" >&2; exit 127; fi');
   lines.push('REAL_CWD=$(cd "$CWD" 2>/dev/null && pwd -P) || { echo "invalid_cwd: cwd does not exist or is not accessible: $CWD" >&2; exit 126; }');
@@ -909,29 +943,45 @@ function buildRemoteScript(req: ValidatedExecRequest): string {
   lines.push('cd "$REAL_CWD"');
   lines.push('CHILD_PID=');
   lines.push('WATCHDOG_PID=');
+  lines.push('CANCEL_WATCH_PID=');
   lines.push('kill_child_group() {');
   lines.push('  sig="$1"');
   lines.push('  if [ -n "${CHILD_PID:-}" ]; then');
-  lines.push('    kill "-$sig" "-$CHILD_PID" 2>/dev/null || kill "-$sig" "$CHILD_PID" 2>/dev/null || true');
+  lines.push("    python3 -c 'import os,signal,sys; pgid=int(sys.argv[1]); sig=getattr(signal,\"SIG\"+sys.argv[2])\ntry: os.killpg(pgid,sig)\nexcept ProcessLookupError: pass' \"$CHILD_PID\" \"$sig\" 2>/dev/null || true");
   lines.push('  fi');
   lines.push('}');
-  lines.push('stop_watchdog() {');
+  lines.push('child_group_alive() {');
+  lines.push('  [ -n "${CHILD_PID:-}" ] || return 1');
+  lines.push("  python3 -c 'import os,sys; pgid=int(sys.argv[1])\ntry: os.killpg(pgid,0)\nexcept ProcessLookupError: raise SystemExit(1)\nexcept PermissionError: pass' \"$CHILD_PID\" 2>/dev/null");
+  lines.push('}');
+  lines.push('stop_watchdogs() {');
   lines.push('  if [ -n "${WATCHDOG_PID:-}" ]; then');
   lines.push('    kill "$WATCHDOG_PID" 2>/dev/null || true');
   lines.push('    wait "$WATCHDOG_PID" 2>/dev/null || true');
   lines.push('  fi');
+  lines.push('  if [ -n "${CANCEL_WATCH_PID:-}" ]; then');
+  lines.push('    kill "$CANCEL_WATCH_PID" 2>/dev/null || true');
+  lines.push('    wait "$CANCEL_WATCH_PID" 2>/dev/null || true');
+  lines.push('  fi');
+  lines.push('}');
+  lines.push('mark_done() {');
+  lines.push('  if [ -e "$CANCEL_FILE" ]; then : > "$DONE_FILE"; else rm -rf "$CONTROL_DIR"; fi');
   lines.push('}');
   lines.push('terminate_child_group() {');
   lines.push('  trap - TERM HUP INT EXIT');
   lines.push('  kill_child_group TERM');
   lines.push('  sleep "$KILL_GRACE_SECONDS"');
   lines.push('  kill_child_group KILL');
-  lines.push('  stop_watchdog');
+  lines.push('  stop_watchdogs');
+  lines.push('  mark_done');
   lines.push('  exit 143');
   lines.push('}');
   lines.push('trap terminate_child_group TERM HUP INT');
   lines.push('setsid /bin/sh -c "$CMD" &');
   lines.push('CHILD_PID=$!');
+  lines.push("printf '%s\\n' \"$CHILD_PID\" > \"$PGID_FILE\"");
+  lines.push("python3 -c 'import os,signal,sys,time\npgid=int(sys.argv[1]); cancel=sys.argv[2]; grace=float(sys.argv[3])\ndef alive():\n    try: os.killpg(pgid,0); return True\n    except ProcessLookupError: return False\nwhile alive():\n    if os.path.exists(cancel):\n        try: os.killpg(pgid,signal.SIGTERM)\n        except ProcessLookupError: break\n        end=time.monotonic()+grace\n        while time.monotonic() < end and alive(): time.sleep(0.1)\n        if alive():\n            try: os.killpg(pgid,signal.SIGKILL)\n            except ProcessLookupError: pass\n        break\n    time.sleep(0.1)' \"$CHILD_PID\" \"$CANCEL_FILE\" \"$KILL_GRACE_SECONDS\" &");
+  lines.push('CANCEL_WATCH_PID=$!');
   lines.push('(');
   lines.push('  SLEEP_PID=');
   lines.push('  trap \'if [ -n "${SLEEP_PID:-}" ]; then kill "$SLEEP_PID" 2>/dev/null || true; fi; exit 0\' TERM');
@@ -947,15 +997,66 @@ function buildRemoteScript(req: ValidatedExecRequest): string {
   lines.push('wait "$CHILD_PID"');
   lines.push('STATUS=$?');
   lines.push('set -e');
-  lines.push('stop_watchdog');
+  lines.push('stop_watchdogs');
   lines.push('trap - TERM HUP INT');
-  lines.push('if kill -0 "-$CHILD_PID" 2>/dev/null; then');
+  lines.push('if child_group_alive; then');
   lines.push('  kill_child_group TERM');
   lines.push('  sleep 1');
   lines.push('  kill_child_group KILL');
   lines.push('fi');
+  lines.push('mark_done');
   lines.push('exit "$STATUS"');
   return lines.join('\n') + '\n';
+}
+
+
+function remoteControlDir(execId: string): string {
+  if (!/^exec-[0-9a-f-]+$/i.test(execId)) throw new Error(`invalid exec id for remote control path: ${execId}`);
+  return `/tmp/exec-mcp-runtime/${execId}`;
+}
+
+async function requestRemoteCancellation(config: ExecMcpConfig, execId: string, killGraceSeconds: number): Promise<boolean> {
+  const controlDir = remoteControlDir(execId);
+  const maxWaitSeconds = Math.max(10, killGraceSeconds + 10);
+  const script = [
+    'set -eu',
+    `CONTROL_DIR_B64='${b64(controlDir)}'`,
+    `MAX_WAIT_SECONDS='${maxWaitSeconds}'`,
+    'CONTROL_DIR=$(printf %s "$CONTROL_DIR_B64" | base64 -d)',
+    'CANCEL_FILE="$CONTROL_DIR/cancel"',
+    'DONE_FILE="$CONTROL_DIR/done"',
+    'umask 077',
+    'mkdir -p "$CONTROL_DIR"',
+    ': > "$CANCEL_FILE"',
+    'LEFT="$MAX_WAIT_SECONDS"',
+    'while [ "$LEFT" -gt 0 ]; do',
+    '  if [ -e "$DONE_FILE" ]; then rm -rf "$CONTROL_DIR"; exit 0; fi',
+    '  sleep 1',
+    '  LEFT=$((LEFT - 1))',
+    'done',
+    'exit 75'
+  ].join('\n') + '\n';
+  const { child, stdin } = spawnRemoteShell(config, script);
+  child.stdin.end(stdin);
+  child.stdout.resume();
+  child.stderr.resume();
+  const timeoutMs = (config.remote.connectTimeoutSeconds + maxWaitSeconds + 3) * 1000;
+  return await new Promise<boolean>((resolveControl) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveControl(ok);
+    };
+    const timer = setTimeout(() => {
+      try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {}
+      finish(false);
+    }, timeoutMs);
+    timer.unref?.();
+    child.on('error', () => finish(false));
+    child.on('close', (code) => finish(code === 0));
+  });
 }
 
 function shellQuote(value: string): string {

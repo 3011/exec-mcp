@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org/).
+
+## [0.6.1] - 2026-08-14
+
+### Fixed
+
+- Fixed running cancellation so it terminates the remote command process group instead of relying on local SSH transport teardown.
+- Replaced shell-builtin negative-PID process-group signalling with explicit `python3 os.killpg()` calls to avoid `/bin/sh` portability ambiguity.
+- Added a per-job remote `/tmp/exec-mcp-runtime/<exec_id>` cancellation handshake and `remote_exit_confirmed` reporting; unconfirmed remote termination now finalizes as `failed` with `failure_reason=remote_termination_unconfirmed`.
+- Updated the fake SSH harness to isolate the simulated remote shell from the local transport process group, preventing false-positive cancellation tests.
+- Added a regression test matching the live failure mode where a cancelled background `(sleep; touch marker)` process previously survived.
+
 ## [0.6.0] - 2026-08-13
 
 ### Added
@@ -98,7 +109,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - Defaulted SSH host-key checking to strict mode and neutral secret paths.
 - Removed a tracked deployment-specific `known_hosts` file.
 
-[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/3011/exec-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/3011/exec-mcp/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/3011/exec-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/3011/exec-mcp/compare/v0.4.0...v0.5.0

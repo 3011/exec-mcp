@@ -151,6 +151,7 @@ export interface FinalizeInput {
   exitCode?: number | null;
   signal?: NodeJS.Signals | null;
   transportExitConfirmed?: boolean;
+  remoteExitConfirmed?: boolean | null;
   finalState?: FinalExecutionState;
   spawnFailed?: boolean;
   diagnostic?: string;
@@ -332,6 +333,7 @@ export class ExecRegistry {
     if (rec.timer) clearTimeout(rec.timer);
     if (rec.emergencyTimer) clearTimeout(rec.emergencyTimer);
     rec.transportExitConfirmed = result.transportExitConfirmed === true;
+    rec.remoteExitConfirmed = result.remoteExitConfirmed ?? null;
     const finalState = result.finalState || inferFinalState(rec, result);
     const history = historyRecord(rec, finalState, result);
     this.active.delete(id);
@@ -503,7 +505,7 @@ function historyRecord(rec: ExecutionRecord, finalState: FinalExecutionState, re
     signal: result.signal ?? null,
     timed_out: finalState === 'timed_out',
     transport_exit_confirmed: result.transportExitConfirmed === true,
-    remote_exit_confirmed: null
+    remote_exit_confirmed: result.remoteExitConfirmed ?? rec.remoteExitConfirmed ?? null
   };
   if (failureReason) history.failure_reason = failureReason;
   if (result.diagnostic) history.diagnostic = result.diagnostic;

@@ -136,7 +136,7 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 
 ### Cancellation boundary
 
-`cancel_exec`, MCP cancellation notifications, HTTP disconnects, and timeouts request termination of the local SSH transport process group. Queued jobs can be cancelled before a process is spawned, and terminal job states are immutable. Capacity is released only after runner finalization. A confirmed local SSH transport exit does not prove that every independently detached remote descendant has exited.
+`cancel_exec`, MCP cancellation notifications, HTTP disconnects, and timeouts request termination of the isolated remote command process group. A short secondary SSH control request writes a per-job cancellation marker under `/tmp/exec-mcp-runtime`, and the remote wrapper terminates the command PGID with SIGTERM followed by bounded SIGKILL escalation. Queued jobs can be cancelled before a process is spawned, and terminal job states are immutable. Running cancellation records `remote_exit_confirmed=true` only after the remote wrapper acknowledges cleanup; an unconfirmed remote termination finalizes as `failed` rather than claiming `cancelled`.
 
 ## Configuration
 

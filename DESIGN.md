@@ -101,12 +101,12 @@ Lifecycle steps:
 2. Resolve the remote working directory and verify its real path remains inside `ALLOWED_CWDS`.
 3. Register the Job Manager record in `queued` state.
 4. Admit the job only when its sync/async class limit and the global running limit both permit it. Queued jobs do not consume a running slot.
-5. Enter `running`, arm the runtime timeout, and spawn the isolated local SSH transport process group.
+5. Enter `running`, arm the runtime timeout, spawn the local SSH transport, and start the user command in an isolated remote process group.
 6. Drain stdout and stderr continuously. Synchronous forwarding remains bounded; Job Manager logs are retained in separate bounded buffers.
 7. React to normal exit, runtime timeout, HTTP disconnect, MCP cancellation, `cancel_exec`, or service shutdown.
 8. Finalize exactly once into an immutable terminal state, release running capacity, and retain sanitized bounded history.
 
-Terminal states never transition again. Cancelling a queued job terminalizes it without spawning a process. Cancelling a running job terminates the process group with SIGTERM followed by bounded SIGKILL escalation.
+Terminal states never transition again. Cancelling a queued job terminalizes it without spawning a process. Cancelling a running job writes a per-job remote cancellation marker over a secondary bounded SSH control request; the remote wrapper terminates the command PGID with SIGTERM followed by bounded SIGKILL escalation and acknowledges cleanup before `remote_exit_confirmed=true`. If remote cleanup cannot be confirmed, the job finalizes as failed instead of claiming cancellation succeeded.
 
 ## Bounds
 
@@ -175,7 +175,7 @@ The service does not provide built-in client authentication or TLS. Operators mu
 
 ## Important residual limits
 
-- A local SSH transport exit does not prove every independently detached remote process exited.
+- Remote cancellation confirmation covers descendants that remain in the isolated command process group. A command that deliberately daemonizes into a new session/process group can still escape that boundary and must be constrained by remote-host policy.
 - Output redaction is defense in depth, not a guarantee that every secret format is recognized.
 - State, history, and cancellation metadata are process-local and disappear after restart.
 - There is no persistent queue or multi-tenant isolation.
@@ -189,7 +189,7 @@ The service does not provide built-in client authentication or TLS. Operators mu
 | stderr warning | stderr event and exit code 0 |
 | invalid or escaped cwd | validation rejection before useful command execution |
 | large output | output drains, `truncated=true`, tails remain bounded |
-| timeout | process group termination requested and active slot finalized |
+| timeout | remote process group termination requested, remote cleanup confirmed when possible, and active slot finalized |
 | client disconnect | matching execution cancelled and request mapping removed |
 | MCP cancellation | only the matching session request is cancelled |
 | manual cancellation | idempotent cancellation result |
