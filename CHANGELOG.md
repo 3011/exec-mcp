@@ -1,6 +1,28 @@
 # Changelog
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org/).
+## [0.6.0] - 2026-08-13
+
+### Added
+
+- Added `start_exec` for asynchronous background execution through a unified in-process Exec Job Manager.
+- Added queued admission with independent sync, async, and global running-slot limits plus a bounded queue.
+- Added incremental `get_exec_status` stdout/stderr reads with independent cursors, bounded long-polling, pagination indicators, and permanent-log-truncation indicators.
+- Added bounded per-job retained logs, job retention/GC controls, queue/admission metrics, and graceful shutdown of active background jobs.
+
+### Changed
+
+- Refactored `exec` to submit through the same `ExecutionSpec` and runner lifecycle as `start_exec`, then wait internally for terminal completion while preserving the synchronous public result.
+- Runtime timeout now starts when a queued job enters execution rather than while it waits for admission.
+- `list_active_execs` now reports queued and running jobs together with sync/async/global capacity and queue position.
+- `cancel_exec` terminalizes queued jobs immediately and preserves immutable terminal states; running cancellation continues to terminate the full process group.
+- Job metadata, history, list output, and lifecycle logs never retain raw environment values; retained Job Manager output additionally redacts submitted environment values.
+
+### Security
+
+- Preserved bounded process-group termination and added explicit regression coverage for manual cancellation of asynchronous commands with background children.
+- Added hard limits for queue length, retained job logs, status output pages, and `wait_seconds` (maximum 30 seconds).
+
 
 ## [0.5.1] - 2026-08-05
 
@@ -76,6 +98,9 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - Defaulted SSH host-key checking to strict mode and neutral secret paths.
 - Removed a tracked deployment-specific `known_hosts` file.
 
-[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/3011/exec-mcp/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/3011/exec-mcp/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/3011/exec-mcp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/3011/exec-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/3011/exec-mcp/releases/tag/v0.3.0

@@ -124,7 +124,7 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
     if (record) {
       record.cancelSource = 'mcp_notification';
       record.abortController.abort(new Error('mcp_notification_cancel'));
-      if (record.execId) runner.registry.requestAbort(record.execId, 'mcp_notification_cancel', 'mcp_notification');
+      if (record.execId) runner.abortForMcp(record.execId, 'mcp_notification_cancel', 'mcp_notification');
     }
     return null;
   }
@@ -159,12 +159,26 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
           context.mcpRequests.remove(context.sessionId, id);
         }
       }
+      if (name === 'start_exec') {
+        if (context.isBatch) return toolResult(id, 'start_exec_not_supported_in_batch: Send start_exec as a standalone JSON-RPC request.', true);
+        const result = runner.start(args);
+        return toolResult(id, JSON.stringify(result, null, 2), false, result);
+      }
       if (name === 'list_active_execs') {
         const result = runner.listActive();
         return toolResult(id, JSON.stringify(result, null, 2), false, result);
       }
       if (name === 'get_exec_status') {
-        const result = runner.getStatus(requireExecId(args));
+        const statusOptions: { stdoutCursor?: number; stderrCursor?: number; maxOutputBytes?: number; waitSeconds?: number } = {};
+        const stdoutCursor = optionalNonNegativeInt(args.stdout_cursor, 'stdout_cursor');
+        const stderrCursor = optionalNonNegativeInt(args.stderr_cursor, 'stderr_cursor');
+        const maxOutputBytes = optionalNonNegativeInt(args.max_output_bytes, 'max_output_bytes');
+        const waitSeconds = optionalNonNegativeInt(args.wait_seconds, 'wait_seconds');
+        if (stdoutCursor !== undefined) statusOptions.stdoutCursor = stdoutCursor;
+        if (stderrCursor !== undefined) statusOptions.stderrCursor = stderrCursor;
+        if (maxOutputBytes !== undefined) statusOptions.maxOutputBytes = maxOutputBytes;
+        if (waitSeconds !== undefined) statusOptions.waitSeconds = waitSeconds;
+        const result = await runner.getStatus(requireExecId(args), statusOptions);
         return toolResult(id, JSON.stringify(result, null, 2), !result.found, result);
       }
       if (name === 'cancel_exec') {
@@ -220,6 +234,13 @@ function requireExecId(args: UnknownRecord): string {
   const execId = typeof args?.exec_id === 'string' ? args.exec_id.trim() : '';
   if (!execId) throw new ExecRejectedError('invalid_exec_id', 'exec_id must be a non-empty string');
   return execId;
+}
+
+
+function optionalNonNegativeInt(value: unknown, name: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Number.isInteger(value) || Number(value) < 0) throw new ExecRejectedError(`invalid_${name}`, `${name} must be a non-negative integer`);
+  return Number(value);
 }
 
 function execStructuredContent(summary: ExecSummary): ExecSummary {

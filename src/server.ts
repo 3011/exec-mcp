@@ -228,10 +228,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     });
   }
 
+  let shuttingDown = false;
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.error(`received ${signal}, shutting down`);
     server.close();
     if (metricsServer) metricsServer.close();
+    await runner.shutdown();
     try { await once(server, 'close'); } catch {}
     process.exit(0);
   };

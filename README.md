@@ -19,7 +19,8 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 - Remote working-directory allowlist with realpath and symlink-escape checks.
 - ChatGPT-native bidirectional artifact transfer using file references, binary SSH streaming, SHA-256 verification, and atomic remote commits.
 - Embedded-resource export that materializes verified remote files into ChatGPT without model-authored Base64.
-- Active execution listing, recent status lookup, and idempotent cancellation.
+- Unified Exec Job Manager with synchronous exec, asynchronous start_exec, queued admission, recent status lookup, and idempotent cancellation.
+- Incremental retained job logs with independent stdout/stderr cursors and bounded long-polling.
 - Process-group cleanup, timeout escalation, disconnect cancellation, and emergency circuit breaking.
 - Secret-pattern redaction for streamed output and retained tails.
 - Prometheus-compatible metrics and health endpoints.
@@ -31,10 +32,11 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 
 | Tool | Purpose |
 |---|---|
-| `exec` | Run one bounded non-interactive command on the configured remote host. |
-| `list_active_execs` | List active remote executions without consuming an execution slot. |
-| `get_exec_status` | Read an active execution, bounded history record, or retained transport diagnostic. |
-| `cancel_exec` | Idempotently request cancellation of an active remote execution. |
+| `exec` | Run one bounded non-interactive command synchronously through the Job Manager. |
+| `start_exec` | Submit one bounded background command and immediately return a queryable `exec_id`. |
+| `list_active_execs` | List queued and running remote executions plus sync/async/global admission capacity. |
+| `get_exec_status` | Read status plus incremental redacted stdout/stderr with independent cursors and bounded long-polling. |
+| `cancel_exec` | Idempotently cancel a queued or running execution; terminal states are immutable. |
 | `import_chatgpt_file` | Transfer a current ChatGPT file into the remote environment with SHA-256 verification and atomic commit. |
 | `export_remote_file` | Transfer one verified remote file to ChatGPT as an embedded resource for host-side materialization into `/mnt/data`; oversized files are rejected. |
 
@@ -64,7 +66,7 @@ docker run --rm \
   -e DEFAULT_CWD=/workspace \
   -v "$PWD/id_ed25519:/run/secrets/id_ed25519:ro" \
   -v "$PWD/known_hosts:/run/secrets/known_hosts:ro" \
-  ghcr.io/3011/exec-mcp:v0.5.0
+  ghcr.io/3011/exec-mcp:v0.6.0
 ```
 
 The example binds only to loopback. Add authentication and TLS at the surrounding transport layer before making the service reachable from another machine.
@@ -127,11 +129,14 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 - The final execution summary is authoritative for exit code, signal, timeout, duration, byte counts, and truncation.
 - Stderr output alone does not indicate failure. A non-zero exit code, signal, or timeout does.
 - Once the forwarding limit is reached, output is still drained so the child process cannot block on a full pipe.
-- Only bounded stdout and stderr tails are retained.
+- Synchronous exec keeps bounded final stdout/stderr tails for compatibility.
+- get_exec_status reads bounded retained Job Manager logs incrementally with independent stdout/stderr cursors. has_more_* means another retained page is available; *_log_truncated means older bytes were permanently discarded.
+- Runtime timeout starts only when a queued job enters execution; queue waiting time does not consume timeout_seconds.
+- V1 Job Manager state and retained logs are process-local; service restart does not recover prior queued or running records.
 
 ### Cancellation boundary
 
-`cancel_exec`, MCP cancellation notifications, HTTP disconnects, and timeouts request termination of the local SSH transport process group. Capacity is released only after runner finalization. A confirmed local SSH transport exit does not prove that every independently detached remote descendant has exited.
+`cancel_exec`, MCP cancellation notifications, HTTP disconnects, and timeouts request termination of the local SSH transport process group. Queued jobs can be cancelled before a process is spawned, and terminal job states are immutable. Capacity is released only after runner finalization. A confirmed local SSH transport exit does not prove that every independently detached remote descendant has exited.
 
 ## Configuration
 
@@ -154,7 +159,16 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 | `MAX_TIMEOUT_SECONDS` | `600` | Hard command timeout ceiling. |
 | `DEFAULT_MAX_OUTPUT_BYTES` | `5242880` | Default combined forwarded-output limit. |
 | `HARD_MAX_OUTPUT_BYTES` | `20971520` | Hard forwarded-output ceiling. |
-| `MAX_CONCURRENT_EXECS` | `2` | Maximum active commands. |
+| `MAX_CONCURRENT_EXECS` | `2` | Legacy/default concurrency value used as the fallback for sync, async, and global limits when their dedicated variables are omitted. |
+| `SYNC_MAX_CONCURRENT_EXECS` | `MAX_CONCURRENT_EXECS` | Maximum running synchronous `exec` jobs. |
+| `ASYNC_MAX_CONCURRENT_EXECS` | `MAX_CONCURRENT_EXECS` | Maximum running asynchronous `start_exec` jobs. |
+| `GLOBAL_MAX_CONCURRENT_EXECS` | `MAX_CONCURRENT_EXECS` | Maximum running jobs across both admission classes. |
+| `MAX_QUEUED_EXECS` | `20` | Maximum jobs waiting for an admission slot. |
+| `JOB_LOG_BYTES` | `1048576` | Maximum retained Job Manager stdout bytes per stream and stderr bytes per stream. Older retained bytes are discarded. |
+| `JOB_RETENTION_SECONDS` | `3600` | In-memory retention period for finalized Job Manager log buffers. |
+| `STATUS_DEFAULT_MAX_OUTPUT_BYTES` | `32768` | Default combined incremental stdout/stderr bytes returned by one status query. |
+| `STATUS_HARD_MAX_OUTPUT_BYTES` | `262144` | Hard ceiling for one incremental status-output page. |
+| `STATUS_MAX_WAIT_SECONDS` | `30` | Maximum long-poll duration accepted by `get_exec_status`. |
 | `RING_BUFFER_BYTES` | `65536` | Retained tail capacity per stream. |
 | `HEARTBEAT_SECONDS` | `15` | SSE heartbeat interval. |
 | `KILL_GRACE_SECONDS` | `5` | Delay between termination and forced kill. |

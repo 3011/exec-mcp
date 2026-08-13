@@ -18,7 +18,7 @@ This runbook is deployment-neutral. Adapt service, secret, and orchestration com
 1. `GET /healthz` returns HTTP 200.
 2. `GET /metrics` returns Prometheus text.
 3. MCP `initialize` reports the expected Semantic Version.
-4. `tools/list` reports all six tools.
+4. `tools/list` reports all seven tools, including `start_exec`.
 5. A harmless `exec` such as `pwd` runs on the intended remote host and ends with a successful summary.
 6. The returned working directory matches `DEFAULT_CWD` or the requested allowed path.
 7. `list_active_execs` returns zero active tasks when idle.
@@ -73,14 +73,14 @@ The gateway requires both `REMOTE_HOST` and `REMOTE_KEY_PATH`. Also verify:
 - Check for symlinks that resolve outside the allowlist.
 - For uploads, create the parent directory through an explicitly authorized workflow first.
 
-### `too_many_active_execs`
+### `exec_queue_full` or sustained queueing
 
-Use `list_active_execs` and inspect task age and state.
+Use `list_active_execs` and inspect running counts, queued count, execution class, and queue position.
 
-- A small oldest age usually indicates real concurrency pressure.
-- A task near its timeout may already be terminating.
-- Use `cancel_exec` for a specific active execution when appropriate.
-- Do not raise concurrency until remote-host capacity and failure behavior are understood.
+- Queued jobs do not consume a running slot.
+- Keep sync capacity available for short inspection commands.
+- Use `cancel_exec` for a queued or running execution when appropriate.
+- Do not raise sync, async, global, or queue limits until remote-host capacity and failure behavior are understood.
 
 ### `execution_circuit_open`
 

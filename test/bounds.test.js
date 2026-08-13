@@ -116,20 +116,17 @@ test('secret redaction applies to streamed data and tail summaries', async () =>
   assert.equal(summary.stderr_tail.includes('hunter2'), false);
 });
 
-test('concurrency limit rejects extra active execs', async () => {
+test('sync concurrency limit queues extra executions instead of rejecting them', async () => {
   const runner = makeRunner({ MAX_CONCURRENT_EXECS: '1', DEFAULT_TIMEOUT_SECONDS: '5' });
   const first = runner.run({ command: 'sleep 0.3', cwd: '/tmp' }, () => {});
   await new Promise((resolve) => setTimeout(resolve, 50));
-  await assert.rejects(
-    () => runner.run({ command: 'echo second', cwd: '/tmp' }, () => {}),
-    (err) => err instanceof ExecRejectedError
-      && err.code === 'too_many_active_execs'
-      && /active=1 max=1 oldest_age_seconds=/.test(err.message)
-      && /states=running:1/.test(err.message)
-  );
+  const second = runner.run({ command: 'echo second', cwd: '/tmp' }, () => {});
+  await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(runner.active, 1);
-  const summary = await first;
-  assert.equal(summary.code, 0);
+  assert.equal(runner.queued, 1);
+  assert.equal((await first).code, 0);
+  assert.equal((await second).code, 0);
+  assert.equal(runner.queued, 0);
 });
 
 test('ENV and BASH_ENV are removed before spawning shell', async () => {

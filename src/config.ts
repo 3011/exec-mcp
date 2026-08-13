@@ -32,6 +32,15 @@ export interface ExecMcpConfig {
   artifactImportAllowedHosts: string[];
   ringBufferBytes: number;
   maxConcurrentExecs: number;
+  syncMaxConcurrentExecs: number;
+  asyncMaxConcurrentExecs: number;
+  globalMaxConcurrentExecs: number;
+  maxQueuedExecs: number;
+  jobLogBytes: number;
+  jobRetentionSeconds: number;
+  statusDefaultMaxOutputBytes: number;
+  statusHardMaxOutputBytes: number;
+  statusMaxWaitSeconds: number;
   recentHistoryLimit: number;
   registryReapGraceSeconds: number;
   emergencyReapSeconds: number;
@@ -48,6 +57,8 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
+
+  const legacyMaxConcurrentExecs = positiveInt(env.MAX_CONCURRENT_EXECS, 2);
 
   return {
     host: env.HOST || '0.0.0.0',
@@ -68,7 +79,16 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     artifactImportAllowHttp: String(env.ARTIFACT_IMPORT_ALLOW_HTTP || 'false').toLowerCase() === 'true',
     artifactImportAllowedHosts: splitCsv(env.ARTIFACT_IMPORT_ALLOWED_HOSTS || ''),
     ringBufferBytes: positiveInt(env.RING_BUFFER_BYTES, 65536),
-    maxConcurrentExecs: positiveInt(env.MAX_CONCURRENT_EXECS, 2),
+    maxConcurrentExecs: legacyMaxConcurrentExecs,
+    syncMaxConcurrentExecs: positiveInt(env.SYNC_MAX_CONCURRENT_EXECS, legacyMaxConcurrentExecs),
+    asyncMaxConcurrentExecs: positiveInt(env.ASYNC_MAX_CONCURRENT_EXECS, legacyMaxConcurrentExecs),
+    globalMaxConcurrentExecs: positiveInt(env.GLOBAL_MAX_CONCURRENT_EXECS, legacyMaxConcurrentExecs),
+    maxQueuedExecs: positiveInt(env.MAX_QUEUED_EXECS, 20),
+    jobLogBytes: positiveInt(env.JOB_LOG_BYTES, 1024 * 1024),
+    jobRetentionSeconds: positiveInt(env.JOB_RETENTION_SECONDS, 3600),
+    statusDefaultMaxOutputBytes: positiveInt(env.STATUS_DEFAULT_MAX_OUTPUT_BYTES, 32768),
+    statusHardMaxOutputBytes: positiveInt(env.STATUS_HARD_MAX_OUTPUT_BYTES, 262144),
+    statusMaxWaitSeconds: positiveInt(env.STATUS_MAX_WAIT_SECONDS, 30),
     recentHistoryLimit: positiveInt(env.RECENT_EXEC_HISTORY_LIMIT, 100),
     registryReapGraceSeconds: positiveInt(env.REGISTRY_REAP_GRACE_SECONDS, 30),
     emergencyReapSeconds: positiveInt(env.EMERGENCY_REAP_SECONDS, 30),

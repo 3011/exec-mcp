@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
+export type ExecutionClass = 'sync' | 'async';
+
 export type ExecutionState =
+  | 'queued'
   | 'starting'
   | 'running'
   | 'timeout_aborting'
@@ -17,12 +20,15 @@ export type FinalExecutionState =
   | 'spawn_failed'
   | 'unconfirmed_reaped';
 
+export type PublicJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+
 export type AbortReason =
   | 'request_timeout'
   | 'manual_cancel'
   | 'mcp_notification_cancel'
   | 'http_disconnect'
-  | 'reaper_grace_exceeded';
+  | 'reaper_grace_exceeded'
+  | 'executor_shutdown';
 
 export class TooManyActiveExecsError extends Error {
   readonly code = 'too_many_active_execs';
@@ -50,7 +56,8 @@ const ABORT_STATES = {
   manual_cancel: 'cancel_aborting',
   mcp_notification_cancel: 'cancel_aborting',
   http_disconnect: 'client_closed_aborting',
-  reaper_grace_exceeded: 'killing'
+  reaper_grace_exceeded: 'killing',
+  executor_shutdown: 'killing'
 } as const satisfies Record<AbortReason, ExecutionState>;
 
 export interface ExecutionMetadata {
@@ -59,15 +66,17 @@ export interface ExecutionMetadata {
   commandSha256?: string | null;
   commandLength?: number;
   cwd?: string | null;
+  executionClass?: ExecutionClass;
 }
 
 export interface ExecutionRecord {
   id: string;
   state: ExecutionState;
+  executionClass: ExecutionClass;
   abortReason: AbortReason | null;
   abortSource: string | null;
   createdAt: number;
-  deadlineAt: number;
+  deadlineAt: number | null;
   transportStartedAt: number | null;
   runningAt: number | null;
   abortRequestedAt: number | null;
@@ -91,13 +100,17 @@ export interface ExecutionRecord {
 
 export interface ExecutionHistoryRecord {
   exec_id: string;
+  status: PublicJobStatus;
+  execution_class: ExecutionClass;
   label: string | null;
   command_sha256: string | null;
   command_length: number;
   final_state: FinalExecutionState;
   abort_reason: AbortReason | null;
   abort_source: string | null;
-  started_at: string;
+  created_at: string;
+  started_at: string | null;
+  running_at: string | null;
   finished_at: string;
   duration_ms: number;
   exit_code: number | null;
@@ -105,13 +118,16 @@ export interface ExecutionHistoryRecord {
   timed_out: boolean;
   transport_exit_confirmed: boolean;
   remote_exit_confirmed: boolean | null;
+  failure_reason?: string;
   diagnostic?: string;
   late_exit_observed_at?: string;
 }
 
 export interface PublicActiveExecution {
   exec_id: string;
+  status: 'queued' | 'running';
   state: ExecutionState;
+  execution_class: ExecutionClass;
   label: string | null;
   command_preview: string | null;
   command_sha256: string | null;
@@ -128,6 +144,7 @@ export interface PublicActiveExecution {
   abort_reason: AbortReason | null;
   transport_exit_confirmed: boolean;
   remote_exit_confirmed: boolean | null;
+  queue_position: number | null;
 }
 
 export interface FinalizeInput {
@@ -137,6 +154,7 @@ export interface FinalizeInput {
   finalState?: FinalExecutionState;
   spawnFailed?: boolean;
   diagnostic?: string;
+  failureReason?: string;
 }
 
 interface RegistryOptions {
@@ -156,7 +174,7 @@ interface RegistryMetrics {
 export type CancelResult =
   | { exec_id: string; result: 'idempotent'; accepted: true; idempotent: true; state: ExecutionState }
   | { exec_id: string; result: 'conflicting_abort_reason'; accepted: false; state: ExecutionState; abort_reason: AbortReason }
-  | { exec_id: string; result: 'accepted'; accepted: true; idempotent: false; state: 'cancel_aborting' }
+  | { exec_id: string; result: 'accepted'; accepted: true; idempotent: false; state: ExecutionState }
   | { exec_id: string; result: 'already_finished'; accepted: false; final_state: FinalExecutionState }
   | { exec_id: string; result: 'exec_not_found'; accepted: false };
 
@@ -187,23 +205,25 @@ export class ExecRegistry {
   }
 
   get activeCount(): number { return this.active.size; }
+  get queuedCount(): number { return [...this.active.values()].filter((rec) => rec.state === 'queued').length; }
+  get slotCount(): number { return [...this.active.values()].filter((rec) => rec.state !== 'queued').length; }
   get circuitOpen(): boolean { return this.unconfirmed.size > 0; }
 
-  acquire({ timeoutMs, metadata = {} }: { timeoutMs: number; metadata?: ExecutionMetadata }): ExecutionRecord {
+  register({ timeoutMs, metadata = {}, initialState = 'queued' }: { timeoutMs: number; metadata?: ExecutionMetadata; initialState?: 'queued' | 'starting' }): ExecutionRecord {
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive integer');
     if (this.circuitOpen) throw new ExecutionCircuitOpenError(this.unconfirmed.size);
-    if (this.active.size >= this.maxActive) throw new TooManyActiveExecsError(this.tooManyActiveMessage());
 
     const now = Date.now();
     const id = `exec-${randomUUID()}`;
     const controller = new AbortController();
     const rec: ExecutionRecord = {
       id,
-      state: 'starting',
+      state: initialState,
+      executionClass: metadata.executionClass ?? 'sync',
       abortReason: null,
       abortSource: null,
       createdAt: now,
-      deadlineAt: now + timeoutMs,
+      deadlineAt: null,
       transportStartedAt: null,
       runningAt: null,
       abortRequestedAt: null,
@@ -224,10 +244,19 @@ export class ExecRegistry {
       timer: null,
       emergencyTimer: null
     };
-    rec.timer = setTimeout(() => this.requestAbort(id, 'request_timeout', 'timeout'), timeoutMs);
-    rec.timer.unref?.();
     this.active.set(id, rec);
+    if (initialState === 'starting') this.armTimeout(rec);
     return rec;
+  }
+
+  acquire({ timeoutMs, metadata = {} }: { timeoutMs: number; metadata?: ExecutionMetadata }): ExecutionRecord {
+    if (this.circuitOpen) throw new ExecutionCircuitOpenError(this.unconfirmed.size);
+    if (this.slotCount >= this.maxActive) throw new TooManyActiveExecsError(this.tooManyActiveMessage());
+    return this.register({ timeoutMs, metadata, initialState: 'starting' });
+  }
+
+  markStarting(id: string): boolean {
+    return this.transition(id, ['queued'], 'starting');
   }
 
   markTransportStarted(id: string, pid: number | undefined): boolean {
@@ -239,7 +268,12 @@ export class ExecRegistry {
   }
 
   markRunning(id: string): boolean {
-    return this.transition(id, ['starting'], 'running', { runningAt: Date.now() });
+    const rec = this.active.get(id);
+    if (!rec || rec.finalized || rec.state !== 'starting') return false;
+    rec.state = 'running';
+    rec.runningAt = Date.now();
+    this.armTimeout(rec);
+    return true;
   }
 
   transition(id: string, expectedStates: readonly ExecutionState[], nextState: ExecutionState, fields: Partial<ExecutionRecord> = {}): boolean {
@@ -259,7 +293,7 @@ export class ExecRegistry {
     rec.abortReason = reason;
     rec.abortSource = source;
     rec.abortRequestedAt = Date.now();
-    rec.state = ABORT_STATES[reason] || 'cancel_aborting';
+    rec.state = ABORT_STATES[reason];
     if (!rec.controller.signal.aborted) rec.controller.abort(new Error(reason));
     return { found: true, accepted: true, idempotent: false, record: rec };
   }
@@ -274,9 +308,9 @@ export class ExecRegistry {
         return { exec_id: id, result: 'conflicting_abort_reason', accepted: false, state: rec.state, abort_reason: rec.abortReason };
       }
       this.requestAbort(id, 'manual_cancel', 'manual_tool');
-      return { exec_id: id, result: 'accepted', accepted: true, idempotent: false, state: 'cancel_aborting' };
+      return { exec_id: id, result: 'accepted', accepted: true, idempotent: false, state: this.active.get(id)?.state ?? 'cancel_aborting' };
     }
-    const history = this.findRecent(id);
+    const history = this.findRecent(id) || this.unconfirmed.get(id) || null;
     if (history) return { exec_id: id, result: 'already_finished', accepted: false, final_state: history.final_state };
     return { exec_id: id, result: 'exec_not_found', accepted: false };
   }
@@ -292,7 +326,7 @@ export class ExecRegistry {
     const rec = this.active.get(id);
     if (!rec || rec.finalized) {
       if (result.transportExitConfirmed) this.observeLateTransportClose(id, result);
-      return { finalized: false, record: this.findRecent(id) };
+      return { finalized: false, record: this.findRecent(id) || this.unconfirmed.get(id) || null };
     }
     rec.finalized = true;
     if (rec.timer) clearTimeout(rec.timer);
@@ -312,7 +346,8 @@ export class ExecRegistry {
     const finalized = this.finalize(id, {
       finalState: 'unconfirmed_reaped',
       transportExitConfirmed: false,
-      diagnostic: 'registry capacity forcibly released before transport close confirmation'
+      diagnostic: 'registry capacity forcibly released before transport close confirmation',
+      failureReason: 'unconfirmed_transport_reaped'
     });
     if (finalized.record) this.unconfirmed.set(id, finalized.record);
     this.onEmergencyReap?.(finalized.record);
@@ -333,7 +368,7 @@ export class ExecRegistry {
 
   reap(now = Date.now()): void {
     for (const rec of this.active.values()) {
-      if (rec.finalized || now <= rec.deadlineAt + this.reapGraceMs) continue;
+      if (rec.finalized || rec.state === 'queued' || rec.deadlineAt === null || now <= rec.deadlineAt + this.reapGraceMs) continue;
       if (rec.state !== 'killing') {
         this.requestAbort(rec.id, rec.abortReason || 'reaper_grace_exceeded', 'reaper');
         rec.state = 'killing';
@@ -368,13 +403,11 @@ export class ExecRegistry {
 
   pushRecent(record: ExecutionHistoryRecord): void {
     this.recent.push(record);
-    while (this.recent.length > this.historyLimit) {
-      this.recent.shift();
-    }
+    while (this.recent.length > this.historyLimit) this.recent.shift();
   }
 
   tooManyActiveMessage(): string {
-    const records = this.listActive();
+    const records = this.listActive().filter((rec) => rec.state !== 'queued');
     const oldest = records.reduce((max, rec) => Math.max(max, rec.elapsed_seconds), 0);
     const states = new Map<ExecutionState, number>();
     for (const rec of records) states.set(rec.state, (states.get(rec.state) || 0) + 1);
@@ -382,7 +415,7 @@ export class ExecRegistry {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([state, count]) => `${state}:${count}`)
       .join(',');
-    return `too_many_active_execs: active=${this.active.size} max=${this.maxActive} oldest_age_seconds=${oldest}${statesText ? ` states=${statesText}` : ''}`;
+    return `too_many_active_execs: active=${this.slotCount} max=${this.maxActive} oldest_age_seconds=${oldest}${statesText ? ` states=${statesText}` : ''}`;
   }
 
   close(): void {
@@ -392,20 +425,42 @@ export class ExecRegistry {
       if (rec.emergencyTimer) clearTimeout(rec.emergencyTimer);
     }
   }
+
+  private armTimeout(rec: ExecutionRecord): void {
+    if (rec.timer || rec.finalized) return;
+    const now = Date.now();
+    rec.deadlineAt = now + rec.timeoutMs;
+    rec.timer = setTimeout(() => this.requestAbort(rec.id, 'request_timeout', 'timeout'), rec.timeoutMs);
+    rec.timer.unref?.();
+  }
 }
 
 function inferFinalState(rec: ExecutionRecord, result: FinalizeInput): FinalExecutionState {
   if (rec.abortReason === 'request_timeout' || rec.abortReason === 'reaper_grace_exceeded') return 'timed_out';
   if (rec.abortReason === 'manual_cancel' || rec.abortReason === 'mcp_notification_cancel') return 'cancelled';
   if (rec.abortReason === 'http_disconnect') return 'client_closed';
+  if (rec.abortReason === 'executor_shutdown') return 'failed';
   if (result.spawnFailed) return 'spawn_failed';
   return result.exitCode === 0 ? 'completed' : 'failed';
+}
+
+function publicStatusForState(state: ExecutionState): 'queued' | 'running' {
+  return state === 'queued' ? 'queued' : 'running';
+}
+
+function publicStatusForFinalState(state: FinalExecutionState): PublicJobStatus {
+  if (state === 'completed') return 'completed';
+  if (state === 'cancelled') return 'cancelled';
+  if (state === 'timed_out') return 'timed_out';
+  return 'failed';
 }
 
 function publicActive(rec: ExecutionRecord, now: number): PublicActiveExecution {
   return {
     exec_id: rec.id,
+    status: publicStatusForState(rec.state),
     state: rec.state,
+    execution_class: rec.executionClass,
     label: rec.label,
     command_preview: rec.commandPreview,
     command_sha256: rec.commandSha256,
@@ -421,21 +476,27 @@ function publicActive(rec: ExecutionRecord, now: number): PublicActiveExecution 
     remote_pgid: rec.remotePgid,
     abort_reason: rec.abortReason,
     transport_exit_confirmed: rec.transportExitConfirmed,
-    remote_exit_confirmed: rec.remoteExitConfirmed
+    remote_exit_confirmed: rec.remoteExitConfirmed,
+    queue_position: null
   };
 }
 
 function historyRecord(rec: ExecutionRecord, finalState: FinalExecutionState, result: FinalizeInput): ExecutionHistoryRecord {
   const finishedAt = Date.now();
+  const failureReason = result.failureReason || inferFailureReason(rec, finalState);
   const history: ExecutionHistoryRecord = {
     exec_id: rec.id,
+    status: publicStatusForFinalState(finalState),
+    execution_class: rec.executionClass,
     label: rec.label,
     command_sha256: rec.commandSha256,
     command_length: rec.commandLength,
     final_state: finalState,
     abort_reason: rec.abortReason,
     abort_source: rec.abortSource,
-    started_at: new Date(rec.createdAt).toISOString(),
+    created_at: new Date(rec.createdAt).toISOString(),
+    started_at: rec.runningAt ? new Date(rec.runningAt).toISOString() : null,
+    running_at: rec.runningAt ? new Date(rec.runningAt).toISOString() : null,
     finished_at: new Date(finishedAt).toISOString(),
     duration_ms: Math.max(0, finishedAt - rec.createdAt),
     exit_code: result.exitCode ?? null,
@@ -444,6 +505,15 @@ function historyRecord(rec: ExecutionRecord, finalState: FinalExecutionState, re
     transport_exit_confirmed: result.transportExitConfirmed === true,
     remote_exit_confirmed: null
   };
+  if (failureReason) history.failure_reason = failureReason;
   if (result.diagnostic) history.diagnostic = result.diagnostic;
   return history;
+}
+
+function inferFailureReason(rec: ExecutionRecord, finalState: FinalExecutionState): string | undefined {
+  if (rec.abortReason === 'executor_shutdown') return 'executor_restarted';
+  if (finalState === 'spawn_failed') return 'spawn_failed';
+  if (finalState === 'client_closed') return 'client_closed';
+  if (finalState === 'unconfirmed_reaped') return 'unconfirmed_transport_reaped';
+  return undefined;
 }

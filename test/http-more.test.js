@@ -76,22 +76,26 @@ test('HTTP SSE final exit contains graceful-degradation tail summary', async () 
   });
 });
 
-test('HTTP concurrency overload returns SSE error', async () => {
-  await withServer({ MAX_CONCURRENT_EXECS: '1' }, async (base) => {
-    const first = fetch(`${base}/exec`, {
+test('HTTP sync execution queues when its admission pool is full', async () => {
+  await withServer({ MAX_CONCURRENT_EXECS: '1' }, async (base, runner) => {
+    const first = fetch(base + '/exec', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
       body: JSON.stringify({ command: 'sleep 0.5', cwd: '/tmp' })
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const second = await fetch(`${base}/exec`, {
+    const second = fetch(base + '/exec', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
       body: JSON.stringify({ command: 'echo second', cwd: '/tmp' })
     });
-    const events = parseSse(await second.text());
-    assert.equal(events.at(-1).event, 'error');
-    assert.equal(events.at(-1).data.code, 'too_many_active_execs');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(runner.active, 1);
+    assert.equal(runner.queued, 1);
     await (await first).text();
+    const events = parseSse(await (await second).text());
+    assert.equal(events.at(-1).event, 'exit');
+    assert.equal(events.at(-1).data.code, 0);
+    assert.match(events.find((event) => event.event === 'stdout').data.data, /second/);
   });
 });

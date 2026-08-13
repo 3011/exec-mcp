@@ -186,3 +186,32 @@ async function waitForPidExit(pid, timeoutMs = 3000) {
   }
   return !existsSync(`/proc/${pid}`);
 }
+
+test('manual cancel kills the whole async process group including background child', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exec-mcp-cancel-background-'));
+  const pidFile = join(root, 'child.pid');
+  const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root, DEFAULT_TIMEOUT_SECONDS: '5' });
+  try {
+    const started = runner.start({
+      command: `sleep 60 & echo $! > ${pidFile}; wait`,
+      cwd: root,
+      timeout_seconds: 5,
+      label: 'cancel-process-group'
+    });
+    const deadline = Date.now() + 3000;
+    while (!existsSync(pidFile) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(existsSync(pidFile), true, 'background child pid file should be created');
+    const pid = Number.parseInt(await readFile(pidFile, 'utf8'), 10);
+    const cancelled = runner.cancel(started.exec_id);
+    assert.equal(cancelled.result, 'accepted');
+    const final = await runner.getStatus(started.exec_id, { waitSeconds: 3 });
+    assert.equal(final.found, true);
+    assert.equal(final.task.status, 'cancelled');
+    assert.equal(await waitForPidExit(pid), true, `background child should be gone after manual cancel: ${pid}`);
+  } finally {
+    runner.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

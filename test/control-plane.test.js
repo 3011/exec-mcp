@@ -57,19 +57,22 @@ test('get status reads active and recent history', async () => {
   });
 });
 
-test('batch rejects exec but permits control tools', async () => {
+test('batch rejects execution tools but permits control tools', async () => {
   await withServer({}, async (base) => {
     const response = await fetch(`${base}/mcp`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify([
         { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'exec', arguments: { command: 'true' } } },
-        { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_active_execs', arguments: {} } }
+        { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'start_exec', arguments: { command: 'true' } } },
+        { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_active_execs', arguments: {} } }
       ])
     });
     const body = await response.json();
     assert.equal(body[0].result.isError, true);
     assert.match(body[0].result.content[0].text, /exec_not_supported_in_batch/);
-    assert.equal(body[1].result.structuredContent.active, 0);
+    assert.equal(body[1].result.isError, true);
+    assert.match(body[1].result.content[0].text, /start_exec_not_supported_in_batch/);
+    assert.equal(body[2].result.structuredContent.active, 0);
   });
 });
 

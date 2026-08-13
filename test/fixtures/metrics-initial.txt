@@ -4,6 +4,30 @@ exec_mcp_active_execs 0
 # HELP exec_mcp_max_concurrent_execs Configured maximum concurrent executions
 # TYPE exec_mcp_max_concurrent_execs gauge
 exec_mcp_max_concurrent_execs 1
+# HELP exec_mcp_queued_execs Number of queued executions waiting for an admission slot
+# TYPE exec_mcp_queued_execs gauge
+exec_mcp_queued_execs 0
+# HELP exec_mcp_total_active_jobs Number of all non-terminal executions including queued jobs
+# TYPE exec_mcp_total_active_jobs gauge
+exec_mcp_total_active_jobs 0
+# HELP exec_mcp_sync_running Current executions consuming sync admission slots
+# TYPE exec_mcp_sync_running gauge
+exec_mcp_sync_running 0
+# HELP exec_mcp_async_running Current executions consuming async admission slots
+# TYPE exec_mcp_async_running gauge
+exec_mcp_async_running 0
+# HELP exec_mcp_sync_max_concurrent Configured sync execution slot limit
+# TYPE exec_mcp_sync_max_concurrent gauge
+exec_mcp_sync_max_concurrent 1
+# HELP exec_mcp_async_max_concurrent Configured async execution slot limit
+# TYPE exec_mcp_async_max_concurrent gauge
+exec_mcp_async_max_concurrent 1
+# HELP exec_mcp_global_max_concurrent Configured global running execution slot limit
+# TYPE exec_mcp_global_max_concurrent gauge
+exec_mcp_global_max_concurrent 1
+# HELP exec_mcp_max_queued_execs Configured maximum queued executions
+# TYPE exec_mcp_max_queued_execs gauge
+exec_mcp_max_queued_execs 20
 # HELP exec_mcp_requests_total Total validated and rejected exec requests
 # TYPE exec_mcp_requests_total counter
 exec_mcp_requests_total 0
