@@ -50,10 +50,17 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.deepEqual(exportArtifact.outputSchema.properties.embedded.enum, [true]);
     assert.deepEqual(exportArtifact.outputSchema.properties.delivery_mode.enum, ['embedded_resource']);
     assert.equal(tool.annotations.openWorldHint, true);
-    assert.equal(startExec.title, 'Start background remote job');
+    assert.equal(startExec.title, 'Start asynchronous remote job');
     assert.deepEqual(startExec.outputSchema.required, ['exec_id', 'status', 'label', 'created_at', 'queue_position']);
     assert.match(startExec.description, /registered/);
     assert.match(startExec.description, /queued/);
+    assert.match(startExec.description, /runtime is unknown/);
+    assert.match(startExec.description, /run in parallel/);
+    assert.match(startExec.description, /continue independent reasoning or tool work/);
+    assert.match(startExec.description, /get_exec_status/);
+    assert.match(startExec.description, /high-frequency polling/);
+    assert.match(startExec.description, /do not add nohup, disown, or shell backgrounding/);
+    assert.match(startExec.description, /concise labels/);
     assert.equal(listActive.title, 'List active remote executions');
     assert.ok(listActive.outputSchema.properties.queued);
     assert.ok(listActive.outputSchema.properties.sync_max_concurrent);
@@ -64,6 +71,8 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.equal(getStatus.outputSchema.oneOf.length, 3);
     assert.ok(getStatus.outputSchema.properties.task.description);
     assert.equal(getStatus.inputSchema.properties.wait_seconds.maximum, 30);
+    assert.match(getStatus.description, /primary synchronization\/follow-up tool for start_exec/);
+    assert.match(getStatus.description, /rather than immediately busy-polling/);
     assert.ok(getStatus.inputSchema.properties.stdout_cursor);
     assert.ok(getStatus.inputSchema.properties.stderr_cursor);
     assert.ok(getStatus.outputSchema.properties.has_more_stdout);
@@ -97,7 +106,13 @@ test('MCP exec tool schema includes operational context', async () => {
       'stdout_tail',
       'stderr_tail'
     ]);
-    assert.match(tool.description, /remote test environment/);
+    assert.equal(tool.title, 'Run short remote command synchronously');
+    assert.match(tool.description, /roughly within 5 seconds/);
+    assert.match(tool.description, /next reasoning or action depends on its result/);
+    assert.match(tool.description, /prefer start_exec/);
+    assert.match(tool.description, /synchronization point/);
+    assert.match(tool.description, /Never emulate background execution/);
+    assert.match(tool.description, /nohup, disown/);
     assert.match(tool.description, /\/bin\/sh -c/);
     assert.match(tool.description, /ALLOWED_CWDS/);
     assert.match(tool.inputSchema.properties.command.description, /Non-interactive shell command/);

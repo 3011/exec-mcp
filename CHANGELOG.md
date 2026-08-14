@@ -2,6 +2,13 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] - 2026-08-14
+
+### Changed
+
+- Clarified MCP tool-selection guidance so agents use synchronous `exec` for short, result-dependent commands and asynchronous `start_exec` for long, uncertain, or parallelizable work.
+- `start_exec` now explicitly guides agents to continue independent work and defer `get_exec_status` polling until a synchronization point.
+
 ## [0.6.1] - 2026-08-14
 
 ### Fixed
@@ -109,7 +116,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - Defaulted SSH host-key checking to strict mode and neutral secret paths.
 - Removed a tracked deployment-specific `known_hosts` file.
 
-[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/3011/exec-mcp/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/3011/exec-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/3011/exec-mcp/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/3011/exec-mcp/compare/v0.5.0...v0.5.1

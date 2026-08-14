@@ -44,8 +44,8 @@ function executionInputProperties() {
 function execToolSchema() {
   return {
     name: 'exec',
-    title: 'Run remote command',
-    description: 'Run one bounded, non-interactive shell command synchronously in the configured remote test environment. Internally this submits a sync job through the same Job Manager and runner used by start_exec, waits for a terminal state, then returns the final summary. Commands are evaluated by /bin/sh -c. The server validates cwd against ALLOWED_CWDS, enforces runtime and output limits, filters environment variables, enforces dedicated sync/global concurrency limits, and terminates the SSH process group on timeout or cancellation.',
+    title: 'Run short remote command synchronously',
+    description: 'Run one bounded, non-interactive shell command synchronously and wait for its terminal result. Agent selection guidance: prefer exec only when the command is expected to finish quickly (roughly within 5 seconds) AND the next reasoning or action depends on its result. Typical exec cases are pwd, ls, cat/sed/grep, git status/diff, kubectl get, and other small deterministic probes or edits. For builds, test suites, package installs, image builds, scans, sleeps/waits, commands with uncertain duration, or work that can run in parallel, prefer start_exec so useful agent work can continue while the job runs. Never emulate background execution inside exec with nohup, disown, or a trailing/background ampersand; submit the foreground command through start_exec so Job Manager status, cancellation, timeout, and remote process-group cleanup remain authoritative. Do not use exec merely to wait for an asynchronous job; use get_exec_status at the synchronization point. Internally exec submits a sync job through the same Job Manager and runner used by start_exec, waits for a terminal state, then returns the final summary. Commands are evaluated by /bin/sh -c. The server validates cwd against ALLOWED_CWDS, enforces runtime and output limits, filters environment variables, enforces dedicated sync/global concurrency limits, and terminates the managed remote process group on timeout or cancellation.',
     inputSchema: { type: 'object', properties: executionInputProperties(), required: ['command'], additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -76,8 +76,8 @@ function execToolSchema() {
 function startExecToolSchema() {
   return {
     name: 'start_exec',
-    title: 'Start background remote job',
-    description: 'Submit one bounded remote command as an asynchronous Job Manager job and return immediately after the job is registered. Returning exec_id means the job has been registered and is immediately queryable; it does not mean the command succeeded or has started running. Finalized records remain queryable only while bounded Job Manager/history retention keeps them, and in-memory state is lost on service restart. Jobs may be queued before entering the async execution pool. Use get_exec_status for status and incremental redacted logs, and cancel_exec to cancel queued or running jobs.',
+    title: 'Start asynchronous remote job',
+    description: 'Submit one bounded remote command as an asynchronous Job Manager job and return as soon as the job is registered. Agent selection guidance: prefer start_exec whenever runtime is unknown, may exceed a few seconds, or the command can run in parallel with other useful work. Typical start_exec cases are builds, test suites, package installs, container/image builds, scans, migrations, long scripts, sleeps/waits, and multiple independent jobs. Pass the real foreground command to start_exec; do not add nohup, disown, or shell backgrounding, because Job Manager itself owns the background lifecycle. When starting several independent jobs, use concise labels so their results are easy to reconcile. Do not use start_exec for trivial probes whose result is required immediately; exec is simpler for those. After start_exec returns, keep the exec_id and continue independent reasoning or tool work instead of immediately high-frequency polling. At a synchronization point, call get_exec_status with the returned cursors and optionally wait_seconds up to 30 seconds; use cancel_exec if the job is no longer needed. Returning exec_id means the job is registered and immediately queryable; it does not mean the command succeeded or has started running. Jobs may be queued before entering the async execution pool. Finalized records remain queryable only while bounded Job Manager/history retention keeps them, and in-memory state is lost on service restart.',
     inputSchema: { type: 'object', properties: executionInputProperties(), required: ['command'], additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -215,7 +215,7 @@ function getExecStatusToolSchema() {
   return {
     name: 'get_exec_status',
     title: 'Get remote execution status',
-    description: 'Read one Job Manager execution by exec_id and optionally long-poll for a terminal state. Incremental stdout/stderr use independent absolute cursors so repeated calls do not resend complete logs. wait_seconds is bounded by the server and never turns this tool into an unbounded wait.',
+    description: 'Read one Job Manager execution by exec_id and optionally long-poll for a terminal state. This is the primary synchronization/follow-up tool for start_exec: prefer calling it when independent work is finished or a job result is needed, rather than immediately busy-polling after submission. Incremental stdout/stderr use independent absolute cursors so repeated calls do not resend complete logs. wait_seconds is bounded by the server and never turns this tool into an unbounded wait.',
     inputSchema: {
       type: 'object',
       properties: {
