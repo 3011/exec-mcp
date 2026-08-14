@@ -42,6 +42,14 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 
 The control-plane tools are operator-wide. They assume one trusted tenant and are intentionally available even when command capacity is full.
 
+### Choosing `exec` vs `start_exec`
+
+Use `exec` for short, deterministic commands when the next reasoning step needs the result immediately. A useful rule of thumb is roughly five seconds or less: `pwd`, `ls`, `cat`/`grep`, `git status`/`git diff`, `kubectl get`, and similar probes.
+
+Use `start_exec` when runtime is uncertain, may exceed a few seconds, or useful work can continue in parallel. Typical examples are dependency installation, test suites, builds, image builds, scans, migrations, and long scripts. Keep the returned `exec_id`, continue independent work, and use `get_exec_status` at the synchronization point (optionally with bounded `wait_seconds`) rather than busy-polling immediately after submission.
+
+Do not emulate background execution inside `exec` with `nohup`, `disown`, or shell `&`. Pass the real foreground command to `start_exec` so timeout, cancellation, status, retained logs, and remote process-group cleanup remain owned by the Job Manager. Use concise `label` values when several independent jobs run concurrently.
+
 ## Quick start
 
 ### Requirements
@@ -66,10 +74,16 @@ docker run --rm \
   -e DEFAULT_CWD=/workspace \
   -v "$PWD/id_ed25519:/run/secrets/id_ed25519:ro" \
   -v "$PWD/known_hosts:/run/secrets/known_hosts:ro" \
-  ghcr.io/3011/exec-mcp:v0.6.0
+  ghcr.io/3011/exec-mcp:v0.6.2
 ```
 
 The example binds only to loopback. Add authentication and TLS at the surrounding transport layer before making the service reachable from another machine.
+
+Container tags follow the repository release model:
+
+- `vX.Y.Z` is the versioned release tag; treat release tags as immutable by policy.
+- `sha-<short-commit>` identifies an exact commit build; an image digest is the strongest immutable deployment reference.
+- `main` tracks the latest successful default-branch build and should not be treated as an immutable production version.
 
 ### Run from source
 

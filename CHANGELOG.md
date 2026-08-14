@@ -8,6 +8,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 - Clarified MCP tool-selection guidance so agents use synchronous `exec` for short, result-dependent commands and asynchronous `start_exec` for long, uncertain, or parallelizable work.
 - `start_exec` now explicitly guides agents to continue independent work and defer `get_exec_status` polling until a synchronization point.
+- Documented the same `exec` versus `start_exec` selection rules in the public README and clarified immutable versus moving container tags.
+- Added tag-driven GitHub Release automation with changelog-derived notes plus an idempotent historical-release reconciliation path.
 
 ## [0.6.1] - 2026-08-14
 

@@ -27,15 +27,17 @@ This runbook is deployment-neutral. Adapt service, secret, and orchestration com
 ## Release procedure
 
 1. Update `package.json` using Semantic Versioning.
-2. Update `CHANGELOG.md`.
-3. Run `npm run validate`.
-4. Build the container locally.
-5. Open and merge a pull request after CI and CodeQL pass.
-6. Tag the merged commit as `v<package-version>`.
-7. Create a GitHub Release from the matching changelog entry.
-8. Verify the matching GHCR tag was published.
-9. Roll out by immutable release tag or digest.
+2. Update the matching version section in `CHANGELOG.md`.
+3. Run `npm run validate` and build the container locally.
+4. Open and merge a pull request after CI and CodeQL pass.
+5. Create an annotated tag on the merged commit: `git tag -a v<package-version> -m "Release v<package-version>"`.
+6. Push the tag. The existing CI workflow retests the tagged commit and publishes the matching `vX.Y.Z` and `sha-*` GHCR image tags.
+7. The Release workflow extracts the matching `CHANGELOG.md` section and creates the GitHub Release after the tag is pushed.
+8. Verify the CI and Release workflows succeeded and the matching GHCR release tag is pullable.
+9. Roll out by the versioned release tag (treated as immutable by policy) or, preferably for strict pinning, by image digest.
 10. Repeat the readiness checks.
+
+The Release workflow is idempotent. Its main-branch path trigger exists to reconcile older tags that predate Release automation; normal releases are driven by `v*` tag pushes.
 
 ## Rollback
 

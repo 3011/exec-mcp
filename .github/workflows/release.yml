@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v version="$version" '
+            index($0, "## [" version "]") == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+            END { if (!found) exit 2 }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; nothing to do."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release-notes.md
+          fi
+
+  backfill:
+    name: Reconcile historical releases
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Create missing Releases for existing version tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          failures=0
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "$tag already has a GitHub Release"
+              continue
+            fi
+
+            version="${tag#v}"
+            notes="$(mktemp)"
+            if ! awk -v version="$version" '
+              index($0, "## [" version "]") == 1 { found=1; next }
+              found && /^## \[/ { exit }
+              found { print }
+              END { if (!found) exit 2 }
+            ' CHANGELOG.md > "$notes" || [ ! -s "$notes" ]; then
+              echo "::warning::Skipping $tag because CHANGELOG.md has no matching section"
+              rm -f "$notes"
+              continue
+            fi
+
+            if gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$tag" \
+              --notes-file "$notes"; then
+              echo "Created Release $tag"
+            else
+              echo "::warning::Could not create Release $tag"
+              failures=$((failures + 1))
+            fi
+            rm -f "$notes"
+          done < <(git tag --list 'v*' --sort=version:refname)
+
+          if [ "$failures" -gt 0 ]; then
+            echo "::warning::$failures historical release(s) could not be reconciled automatically"
+          fi
