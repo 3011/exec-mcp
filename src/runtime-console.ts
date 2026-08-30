@@ -108,7 +108,7 @@ const RUNTIME_HTML = `<!doctype html>
         <div class="brand-mark" aria-hidden="true"><span></span></div>
         <div>
           <div class="brand">Execution MCP</div>
-          <div class="brand-sub">Runtime Console</div>
+          <div class="brand-sub">Runtime Console · <span id="runtime-version">v—</span> · Read only</div>
         </div>
       </div>
       <div class="top-actions">
@@ -176,10 +176,6 @@ const RUNTIME_HTML = `<!doctype html>
       </section>
     </main>
 
-    <footer>
-      <span>Read only · no execution controls</span>
-      <span id="footer-version">Execution MCP</span>
-    </footer>
   </div>
   <script src="/runtime/assets/app.js" defer></script>
 </body>
@@ -224,7 +220,7 @@ html { background: var(--bg); }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
 button, input { font: inherit; }
 button { color: inherit; }
-.app-shell { width: min(1540px, 100%); margin: 0 auto; padding: 0 28px 28px; }
+.app-shell { width: min(1540px, 100%); margin: 0 auto; padding: 0 28px 10px; }
 .topbar { height: 74px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line-soft); position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(14px); }
 .brand-wrap, .top-actions, .capacity-copy, .panel-header > div, .execution-title-row, .execution-meta, .detail-title-row, .meta-line, .log-tabs { display:flex; align-items:center; }
 .brand-wrap { gap:11px; }
@@ -253,9 +249,9 @@ button { color: inherit; }
 .capacity-copy { gap:9px; color:var(--text-2); font-size:12px; }.capacity-copy strong { color:var(--text); font-family:var(--mono); font-weight:500; }
 .capacity-track { height:5px; border-radius:99px; background:var(--surface-3); overflow:hidden; }.capacity-track span { display:block; width:0; height:100%; border-radius:inherit; background:var(--green); transition:width .25s ease; }
 .capacity-detail { color:var(--text-3); font:11px/1 var(--mono); white-space:nowrap; }
-.workspace { margin-top:18px; display:grid; grid-template-columns:minmax(390px,.88fr) minmax(540px,1.35fr); gap:14px; align-items:start; }
+.workspace { margin-top:18px; display:grid; grid-template-columns:minmax(390px,.88fr) minmax(540px,1.35fr); gap:14px; align-items:stretch; }
 .panel { border:1px solid var(--line); background:var(--surface); border-radius:var(--radius); overflow:hidden; }
-.execution-pane,.detail-pane { min-height:650px; height:calc(100vh - 275px); max-height:860px; }
+.execution-pane,.detail-pane { min-height:460px; height:calc(100vh - 340px); max-height:820px; }
 .panel-header { min-height:62px; padding:0 16px; border-bottom:1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between; }
 .panel-header > div { gap:9px; }.panel-header h2 { font-size:14px; margin:0; letter-spacing:-.01em; }.panel-header .muted { font-family:var(--mono); }
 .toolbar { padding:12px; border-bottom:1px solid var(--line-soft); display:grid; gap:10px; }
@@ -274,20 +270,23 @@ button { color: inherit; }
 .activity-badge { color:var(--text-3); font-weight:500; text-transform:none; letter-spacing:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.activity-badge.active{color:var(--green)}.activity-badge.long-quiet{color:var(--amber)}
 .execution-id-short { margin-left:auto; color:var(--text-3); font:10px/1 var(--mono); }
 .empty-state,.detail-empty { color:var(--text-3); display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }.empty-state { height:280px; gap:4px; }.empty-state strong,.detail-empty strong { color:var(--text-2); font-size:13px; }.empty-state span,.detail-empty p { margin:0; font-size:12px; }
-.detail-pane { overflow:auto; position:sticky; top:88px; }
+.detail-pane { overflow:hidden; position:sticky; top:88px; display:flex; flex-direction:column; }
 .detail-empty { height:100%; padding:50px; }.detail-empty p { max-width:300px; margin-top:6px; line-height:1.55; }.empty-orbit { width:54px;height:54px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;margin-bottom:18px;position:relative}.empty-orbit:after{content:"";position:absolute;width:68px;height:24px;border:1px solid var(--line-soft);border-radius:50%;transform:rotate(-24deg)}.empty-orbit span{width:8px;height:8px;border-radius:50%;background:var(--text-3)}
-.detail-section { padding:18px 20px; border-bottom:1px solid var(--line-soft); }.detail-section:last-child{border-bottom:0}.detail-overview { padding-top:20px; }.detail-title-row { justify-content:space-between; align-items:flex-start; gap:16px; }.detail-title { min-width:0; }.detail-title h2 { font-size:18px; line-height:1.25; margin:7px 0 5px; letter-spacing:-.02em; overflow-wrap:anywhere; }.detail-title .mono-line { color:var(--text-3); font:11px/1.45 var(--mono); overflow-wrap:anywhere; }
+#detail-content { flex:1 1 auto; min-height:0; width:100%; display:flex; flex-direction:column; }
+.detail-summary { flex:0 0 auto; border-bottom:1px solid var(--line-soft); }.detail-summary-main { padding:16px 20px 13px; }.detail-title-row { justify-content:space-between; align-items:flex-start; gap:16px; }.detail-title { min-width:0; }.detail-title h2 { font-size:17px; line-height:1.25; margin:6px 0 4px; letter-spacing:-.02em; overflow-wrap:anywhere; }.detail-title .mono-line { color:var(--text-3); font:10px/1.4 var(--mono); overflow-wrap:anywhere; }.detail-command-line { max-width:100%; margin-top:5px; color:var(--text-2); font:11px/1.4 var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .big-state { display:inline-flex; gap:7px; align-items:center; font:650 10px/1 var(--sans); letter-spacing:.05em; text-transform:uppercase; }.big-state .status-dot{width:7px;height:7px}.detail-duration { color:var(--text-2); font:12px/1 var(--mono); white-space:nowrap; padding-top:3px; }
-.detail-grid { margin-top:18px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:var(--line-soft); }.metric { min-height:70px; padding:12px; background:var(--surface-2); }.metric span { display:block; color:var(--text-3); font-size:10px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:7px; }.metric strong { font:500 12px/1.3 var(--mono); overflow-wrap:anywhere; }.timing-grid{margin-top:0}.timing-grid .metric{min-height:60px}
-.section-title { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:13px; }.section-title h3 { margin:0; font-size:12px; font-weight:650; }.section-title span { color:var(--text-3); font-size:10px; }
+.diagnostic-strip { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); border-top:1px solid var(--line-soft); background:var(--line-soft); gap:1px; }.diagnostic-cell { min-width:0; min-height:54px; padding:9px 10px; background:var(--surface-2); }.diagnostic-cell span { display:block; color:var(--text-3); font-size:9px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.diagnostic-cell strong { display:block; color:var(--text); font:500 11px/1.3 var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.detail-tabs { flex:0 0 auto; min-height:42px; padding:0 16px; display:flex; align-items:flex-end; gap:18px; border-bottom:1px solid var(--line-soft); background:var(--surface); }.detail-tab { position:relative; height:42px; border:0; background:transparent; color:var(--text-3); padding:0 1px; cursor:pointer; font-size:11px; font-weight:600; }.detail-tab:hover{color:var(--text-2)}.detail-tab.active{color:var(--text)}.detail-tab.active:after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--blue);border-radius:2px 2px 0 0}
+.detail-workspace { position:relative; flex:1 1 auto; min-height:0; overflow:hidden; }.detail-tab-panel { position:absolute; inset:0; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px 20px 18px; }.detail-tab-panel.output-panel { padding:12px; overflow:hidden; }.detail-tab-panel.details-panel { padding-bottom:24px; }
+.detail-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:var(--line-soft); }.metric { min-height:64px; padding:11px 12px; background:var(--surface-2); }.metric span { display:block; color:var(--text-3); font-size:9px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }.metric strong { font:500 11px/1.3 var(--mono); overflow-wrap:anywhere; }
+.section-title { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:13px; }.section-title h3 { margin:0; font-size:12px; font-weight:650; }.section-title span { color:var(--text-3); font-size:10px; }.details-primary { display:grid; gap:10px; margin-bottom:16px; }.details-primary .meta-line.command-row { display:block; }.details-primary .command-row .meta-key { width:auto; margin-bottom:6px; }.advanced-details { border-top:1px solid var(--line-soft); margin-top:16px; padding-top:3px; }.advanced-details summary { list-style:none; cursor:pointer; color:var(--text-2); font-size:11px; font-weight:600; padding:11px 0; user-select:none; }.advanced-details summary::-webkit-details-marker{display:none}.advanced-details summary:before{content:"›";display:inline-block;width:15px;color:var(--text-3);font:14px/1 var(--mono);transition:transform 120ms ease}.advanced-details[open] summary:before{transform:rotate(90deg)}.advanced-details .meta-stack{padding:3px 0 2px 15px}
 .meta-stack { display:grid; gap:9px; }.meta-line { min-width:0; gap:10px; }.meta-key { color:var(--text-3); width:92px; flex:0 0 92px; font-size:11px; }.meta-value { color:var(--text-2); font:11px/1.4 var(--mono); min-width:0; overflow-wrap:anywhere; }.meta-value.command { padding:8px 9px; border:1px solid var(--line-soft); border-radius:7px; background:var(--surface-2); width:100%; }
 .trace { position:relative; display:grid; gap:0; }.trace-event { display:grid; grid-template-columns:86px 14px minmax(0,1fr); gap:9px; min-height:42px; }.trace-time { color:var(--text-3); font:10px/18px var(--mono); text-align:right; padding-top:1px; }.trace-rail { position:relative; display:flex; justify-content:center; }.trace-rail:before { content:""; position:absolute; top:12px; bottom:-12px; width:1px; background:var(--line); }.trace-event:last-child .trace-rail:before { display:none; }.trace-dot { width:7px;height:7px;border-radius:50%;background:var(--text-3);margin-top:6px;z-index:1;box-shadow:0 0 0 3px var(--surface); }.trace-event.info .trace-dot{background:var(--green)}.trace-event.warning .trace-dot{background:var(--amber)}.trace-event.error .trace-dot{background:var(--red)}.trace-copy strong { display:block; font-size:11px; font-weight:580; line-height:18px; }.trace-copy span { color:var(--text-3); font:10px/1.4 var(--mono); display:block; overflow-wrap:anywhere; }
-.log-shell { border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:#08090b; color:#d8dee8; }.log-head { min-height:38px; padding:0 10px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #1f2329; background:#0d0f12; }.log-tabs{gap:2px}.log-tab { border:0; background:transparent; color:#7d8795; padding:5px 8px; border-radius:5px; cursor:pointer; font-size:10px; }.log-tab.active{color:#e7ebf0;background:#181b20}.follow-toggle { display:flex; gap:6px; align-items:center; color:#7d8795; font-size:10px; cursor:pointer; user-select:none; }.follow-toggle input{accent-color:#59d49b}.log-output { margin:0; height:280px; overflow:auto; padding:12px 13px 18px; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.55 var(--mono); tab-size:2; }.log-empty { color:#69717d; }.log-warning { color:var(--amber); font:10px/1.4 var(--mono); padding:8px 10px; border-top:1px solid #1f2329; background:#0d0f12; }
+.log-shell { height:100%; min-height:0; border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:#08090b; color:#d8dee8; display:flex; flex-direction:column; }.log-head { min-height:38px; padding:0 10px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #1f2329; background:#0d0f12; }.log-tabs{gap:2px}.log-tab { border:0; background:transparent; color:#7d8795; padding:5px 8px; border-radius:5px; cursor:pointer; font-size:10px; }.log-tab.active{color:#e7ebf0;background:#181b20}.follow-toggle { display:flex; gap:6px; align-items:center; color:#7d8795; font-size:10px; cursor:pointer; user-select:none; }.follow-toggle input{accent-color:#59d49b}.log-output { margin:0; flex:1 1 auto; min-height:0; overflow:auto; padding:12px 13px 18px; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.55 var(--mono); tab-size:2; }.log-empty { color:#69717d; }.log-warning { color:var(--amber); font:10px/1.4 var(--mono); padding:8px 10px; border-top:1px solid #1f2329; background:#0d0f12; }
 .copy-button { border:0;background:transparent;color:var(--text-3);padding:2px 4px;cursor:pointer;font:10px/1 var(--mono); }.copy-button:hover{color:var(--text-2)}
 .hidden { display:none !important; }
-footer { display:flex; justify-content:space-between; color:var(--text-3); font-size:10px; padding:18px 2px 0; }
-@media (max-width:1050px){.workspace{grid-template-columns:1fr}.execution-pane{height:540px;min-height:540px}.detail-pane{height:auto;min-height:620px;max-height:none;position:static}.execution-list{height:393px}}
-@media (max-width:720px){.app-shell{padding:0 14px 18px}.topbar{height:62px}.top-updated{display:none}.connection span:last-child{display:none}.health-pill{padding:6px 8px}.summary-grid{margin-top:14px;grid-template-columns:1fr 1fr}.summary-card:nth-child(2){border-right:0}.summary-card:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.summary-card{min-height:92px;padding:15px}.capacity-panel{grid-template-columns:1fr auto}.capacity-track{grid-column:1/-1;grid-row:2}.workspace{margin-top:12px}.execution-pane{height:520px;min-height:520px}.execution-list{height:373px}.task-group-meta{max-width:100px;overflow:hidden;text-overflow:ellipsis}.detail-grid{grid-template-columns:1fr 1fr}.detail-section{padding:16px}.trace-event{grid-template-columns:70px 13px minmax(0,1fr);gap:7px}.log-output{height:240px}}
+@media (max-width:1050px){.workspace{grid-template-columns:1fr}.execution-pane{height:540px;min-height:540px}.detail-pane{height:650px;min-height:650px;max-height:650px;position:static}.execution-list{height:393px}}
+@media (max-width:720px){.app-shell{padding:0 14px 10px}.topbar{height:62px}.top-updated{display:none}.connection span:last-child{display:none}.health-pill{padding:6px 8px}.summary-grid{margin-top:14px;grid-template-columns:1fr 1fr}.summary-card:nth-child(2){border-right:0}.summary-card:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.summary-card{min-height:92px;padding:15px}.capacity-panel{grid-template-columns:1fr auto}.capacity-track{grid-column:1/-1;grid-row:2}.workspace{margin-top:12px}.execution-pane{height:520px;min-height:520px}.execution-list{height:373px}.task-group-meta{max-width:100px;overflow:hidden;text-overflow:ellipsis}.detail-pane{height:590px;min-height:590px;max-height:590px}.detail-summary-main{padding:14px 15px 11px}.detail-title h2{font-size:16px}.diagnostic-strip{grid-template-columns:repeat(3,minmax(0,1fr))}.diagnostic-cell{min-height:49px;padding:8px 9px}.detail-tabs{padding:0 14px;gap:20px}.detail-tab-panel{padding:14px}.detail-tab-panel.output-panel{padding:10px}.detail-grid{grid-template-columns:1fr 1fr}.trace-event{grid-template-columns:70px 13px minmax(0,1fr);gap:7px}}
 `;
 
 const RUNTIME_JS = `
@@ -312,6 +311,8 @@ const RUNTIME_JS = `
     logTab: 'stdout',
     follow: true,
     logScrollTop: 0,
+    detailTab: null,
+    detailScroll: { trace: 0, details: 0 },
     lastSuccessAt: 0,
     selectedGeneration: 0,
     taskExpansion: loadTaskExpansion()
@@ -335,7 +336,7 @@ const RUNTIME_JS = `
     capRunning: byId('cap-running'), capQueued: byId('cap-queued'), capacityCopy: byId('capacity-copy'), capacityBar: byId('capacity-bar'), capacityDetail: byId('capacity-detail'),
     list: byId('execution-list'), listEmpty: byId('list-empty'), executionCount: byId('execution-count'),
     detailEmpty: byId('detail-empty'), detailContent: byId('detail-content'), search: byId('search-input'), refresh: byId('refresh-button'),
-    theme: byId('theme-toggle'), version: byId('footer-version')
+    theme: byId('theme-toggle'), version: byId('runtime-version')
   };
 
   function make(tag, className, text) {
@@ -488,7 +489,7 @@ const RUNTIME_JS = `
     els.capacityDetail.textContent = 'sync ' + overview.capacity.sync_running + '/' + overview.capacity.sync_max + ' · async ' + overview.capacity.async_running + '/' + overview.capacity.async_max;
     els.health.className = 'health-pill ' + (overview.health === 'healthy' ? 'healthy' : 'degraded');
     els.health.lastElementChild.textContent = overview.health === 'healthy' ? 'Healthy' : 'Degraded';
-    els.version.textContent = 'Execution MCP v' + overview.version;
+    els.version.textContent = 'v' + overview.version;
   }
 
   function taskGroupStatus(items) {
@@ -699,7 +700,112 @@ const RUNTIME_JS = `
     if (pre) pre.scrollTop = pre.scrollHeight;
   }
 
+  function captureDetailScroll() {
+    if (!state.detailTab || state.detailTab === 'output') return;
+    const panel = document.querySelector('.detail-tab-panel[data-tab="' + state.detailTab + '"]');
+    if (panel) state.detailScroll[state.detailTab] = panel.scrollTop;
+  }
+
+  function defaultDetailTab(detail) {
+    const task = detail && detail.task ? detail.task : {};
+    if (issueItem(task) || task.final_state === 'unconfirmed_reaped') return 'trace';
+    const observation = detail && detail.observation ? detail.observation : {};
+    const outputBytes = Number(observation.stdout_bytes || 0) + Number(observation.stderr_bytes || 0);
+    return outputBytes > 0 ? 'output' : 'trace';
+  }
+
+  function setDetailTab(next) {
+    if (!['trace', 'output', 'details'].includes(next) || state.detailTab === next) return;
+    captureDetailScroll();
+    state.detailTab = next;
+    renderDetail();
+  }
+
+  function compactDiagnostic(label, value) {
+    const cell = make('div', 'diagnostic-cell');
+    append(cell, make('span', '', label), make('strong', '', value));
+    return cell;
+  }
+
+  function renderDetailTabs() {
+    const tabs = make('div', 'detail-tabs');
+    tabs.setAttribute('role', 'tablist');
+    for (const name of ['trace', 'output', 'details']) {
+      const button = make('button', 'detail-tab' + (state.detailTab === name ? ' active' : ''), name[0].toUpperCase() + name.slice(1));
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', state.detailTab === name ? 'true' : 'false');
+      button.addEventListener('click', () => setDetailTab(name));
+      tabs.appendChild(button);
+    }
+    return tabs;
+  }
+
+  function renderTracePanel(observation) {
+    const panel = make('div', 'detail-tab-panel');
+    panel.dataset.tab = 'trace';
+    const title = make('div', 'section-title');
+    append(title, make('h3', '', 'Lifecycle trace'), make('span', '', observation.trace ? observation.trace.length + ' events' : '0 events'));
+    append(panel, title, renderTrace(observation));
+    panel.addEventListener('scroll', () => { state.detailScroll.trace = panel.scrollTop; });
+    queueMicrotask(() => { panel.scrollTop = state.detailScroll.trace || 0; });
+    return panel;
+  }
+
+  function renderOutputPanel(detail) {
+    const panel = make('div', 'detail-tab-panel output-panel');
+    panel.dataset.tab = 'output';
+    panel.appendChild(renderLogViewer(detail));
+    return panel;
+  }
+
+  function renderDetailsPanel(detail, task, observation, preview) {
+    const panel = make('div', 'detail-tab-panel details-panel');
+    panel.dataset.tab = 'details';
+    const origin = observation.origin || task.origin || null;
+    const taskContext = detail.task_context || {};
+
+    const primaryTitle = make('div', 'section-title');
+    append(primaryTitle, make('h3', '', 'Execution details'), make('span', '', 'observable facts only'));
+    const primary = make('div', 'details-primary');
+    const command = metaLine('Command', preview || 'Preview disabled by server configuration', 'command');
+    command.classList.add('command-row');
+    append(primary,
+      command,
+      metaLine('Task', taskContext.label || (task.task_handle ? 'Explicit task context' : 'Ungrouped / legacy')),
+      metaLine('Origin', origin ? ((origin.kind === 'mcp' ? 'MCP' : origin.kind) + (origin.tool ? ' · ' + origin.tool : '')) : 'Unavailable')
+    );
+
+    const facts = make('div', 'detail-grid');
+    append(facts,
+      metric('Last output', observation.last_output_at ? relativeTime(observation.last_output_at) : 'No output'),
+      metric('Output', formatBytes((observation.stdout_bytes || 0) + (observation.stderr_bytes || 0))),
+      metric('Started', task.running_at ? localTime(task.running_at) : (task.created_at ? localTime(task.created_at) : '—')),
+      metric('Class', task.execution_class || observation.execution_class || '—'),
+      metric('Total', formatTiming((detail.timings || {}).total_ms)),
+      metric('Termination', formatTiming((detail.timings || {}).termination_ms))
+    );
+
+    const advanced = make('details', 'advanced-details');
+    advanced.appendChild(make('summary', '', 'Advanced metadata'));
+    const stack = make('div', 'meta-stack');
+    append(stack,
+      copyableMetaLine('Execution', task.exec_id || observation.exec_id),
+      copyableMetaLine('Trace', observation.trace_id || task.trace_id),
+      copyableMetaLine('Task handle', task.task_handle || (origin && origin.task_handle) || ''),
+      metaLine('Conversation', task.task_handle ? 'Explicit model-carried context · internal ChatGPT conversation ID is not exposed' : 'Cannot be identified reliably'),
+      metaLine('MCP session', origin && origin.transport_session_id ? shortId(origin.transport_session_id, 42) + ' · transport only, not conversation' : 'Unavailable'),
+      metaLine('Request', origin && origin.request_id ? origin.request_id : 'Unavailable')
+    );
+    advanced.appendChild(stack);
+    append(panel, primaryTitle, primary, facts, advanced);
+    panel.addEventListener('scroll', () => { state.detailScroll.details = panel.scrollTop; });
+    queueMicrotask(() => { panel.scrollTop = state.detailScroll.details || 0; });
+    return panel;
+  }
+
   function renderDetail() {
+    captureDetailScroll();
     const detail = state.detail;
     if (!detail || !detail.found) {
       els.detailEmpty.classList.remove('hidden');
@@ -707,84 +813,52 @@ const RUNTIME_JS = `
       els.detailContent.replaceChildren();
       return;
     }
+    if (!state.detailTab) state.detailTab = defaultDetailTab(detail);
     els.detailEmpty.classList.add('hidden');
     els.detailContent.classList.remove('hidden');
     els.detailContent.replaceChildren();
 
     const task = detail.task || {};
     const observation = detail.observation || {};
+    const timings = detail.timings || {};
+    const diagnostics = detail.diagnostics || {};
     const status = statusOf(task);
-    const overview = make('section', 'detail-section detail-overview');
+    const preview = task.command_preview || observation.command_preview;
+    const activity = activityFor({ ...task, lifecycle: detail.source === 'active' ? 'active' : 'finished' });
+
+    const summary = make('section', 'detail-summary');
+    const summaryMain = make('div', 'detail-summary-main');
     const titleRow = make('div', 'detail-title-row');
     const title = make('div', 'detail-title');
     const bigState = make('span', 'big-state ' + statusClass(status));
     append(bigState, make('span', 'status-dot'), make('span', '', statusLabel(status)));
-    append(title, bigState, make('h2', '', displayName({ ...observation, ...task })), make('div', 'mono-line', task.cwd || observation.cwd || 'cwd unavailable'));
-    append(titleRow, title, make('span', 'detail-duration', durationFor({ ...task, lifecycle: detail.source === 'active' ? 'active' : 'finished' })));
-    overview.appendChild(titleRow);
-
-    const grid = make('div', 'detail-grid');
-    const activity = activityFor({ ...task, lifecycle: detail.source === 'active' ? 'active' : 'finished' });
-    append(grid,
-      metric('Activity', activity.label),
-      metric('Last output', observation.last_output_at ? relativeTime(observation.last_output_at) : 'No output'),
-      metric('Output', formatBytes((observation.stdout_bytes || 0) + (observation.stderr_bytes || 0))),
-      metric('Started', task.running_at ? localTime(task.running_at) : (task.created_at ? localTime(task.created_at) : '—')),
-      metric('Class', task.execution_class || observation.execution_class || '—'),
-      metric(detail.source === 'active' ? 'Timeout' : 'Exit', detail.source === 'active' ? ((task.timeout_seconds || observation.timeout_seconds || '—') + 's') : (task.exit_code === null || task.exit_code === undefined ? (task.signal || '—') : String(task.exit_code)))
+    append(title,
+      bigState,
+      make('h2', '', displayName({ ...observation, ...task })),
+      make('div', 'detail-command-line', preview || 'Command preview unavailable'),
+      make('div', 'mono-line', task.cwd || observation.cwd || 'cwd unavailable')
     );
-    overview.appendChild(grid);
-    els.detailContent.appendChild(overview);
+    append(titleRow, title, make('span', 'detail-duration', formatTiming(timings.total_ms)));
+    summaryMain.appendChild(titleRow);
 
-    const timings = detail.timings || {};
-    const diagnostics = detail.diagnostics || {};
-    const timingSection = make('section', 'detail-section');
-    const timingTitle = make('div', 'section-title');
-    const phaseParts = [];
-    if (diagnostics.phase) phaseParts.push(statusLabel(diagnostics.phase));
-    if (diagnostics.failure_phase) phaseParts.push('failure: ' + statusLabel(diagnostics.failure_phase));
-    append(timingTitle, make('h3', '', 'Execution timings'), make('span', '', phaseParts.join(' · ') || 'derived from lifecycle timestamps'));
-    const timingGrid = make('div', 'detail-grid timing-grid');
-    append(timingGrid,
-      metric('Queue', formatTiming(timings.queue_ms)),
-      metric('Transport launch', formatTiming(timings.transport_startup_ms)),
-      metric('First output', formatTiming(timings.time_to_first_output_ms)),
-      metric('Runtime', formatTiming(timings.runtime_ms)),
-      metric('Termination', formatTiming(timings.termination_ms)),
-      metric('Total', formatTiming(timings.total_ms))
+    const strip = make('div', 'diagnostic-strip');
+    append(strip,
+      compactDiagnostic('Activity', activity.label),
+      compactDiagnostic('Queue', formatTiming(timings.queue_ms)),
+      compactDiagnostic('Startup', formatTiming(timings.transport_startup_ms)),
+      compactDiagnostic('TTFO', formatTiming(timings.time_to_first_output_ms)),
+      compactDiagnostic('Runtime', formatTiming(timings.runtime_ms)),
+      compactDiagnostic(detail.source === 'active' ? 'Phase' : 'Exit', detail.source === 'active' ? statusLabel(diagnostics.phase || status) : (task.exit_code === null || task.exit_code === undefined ? (task.signal || statusLabel(task.final_state || status)) : String(task.exit_code)))
     );
-    append(timingSection, timingTitle, timingGrid);
-    els.detailContent.appendChild(timingSection);
+    append(summary, summaryMain, strip);
+    els.detailContent.appendChild(summary);
+    els.detailContent.appendChild(renderDetailTabs());
 
-    const identity = make('section', 'detail-section');
-    const identityTitle = make('div', 'section-title'); append(identityTitle, make('h3', '', 'Identity & origin'), make('span', '', 'observable facts only'));
-    const stack = make('div', 'meta-stack');
-    const origin = observation.origin || task.origin || null;
-    const taskContext = detail.task_context || {};
-    append(stack,
-      copyableMetaLine('Execution', task.exec_id || observation.exec_id),
-      copyableMetaLine('Trace', observation.trace_id || task.trace_id),
-      metaLine('Origin', origin ? ((origin.kind === 'mcp' ? 'MCP' : origin.kind) + (origin.tool ? ' · ' + origin.tool : '')) : 'Unavailable'),
-      metaLine('Task', taskContext.label || (task.task_handle ? 'Explicit task context' : 'Ungrouped / legacy')),
-      copyableMetaLine('Task handle', task.task_handle || (origin && origin.task_handle) || ''),
-      metaLine('Conversation', task.task_handle ? 'Explicit model-carried context · internal ChatGPT conversation ID is not exposed' : 'Cannot be identified reliably'),
-      metaLine('MCP session', origin && origin.transport_session_id ? shortId(origin.transport_session_id, 42) + ' · transport only, not conversation' : 'Unavailable'),
-      metaLine('Request', origin && origin.request_id ? origin.request_id : 'Unavailable')
-    );
-    const preview = task.command_preview || observation.command_preview;
-    stack.appendChild(metaLine('Command', preview || 'Preview disabled by server configuration', 'command'));
-    append(identity, identityTitle, stack);
-    els.detailContent.appendChild(identity);
-
-    const lifecycle = make('section', 'detail-section');
-    const lifeTitle = make('div', 'section-title'); append(lifeTitle, make('h3', '', 'Lifecycle trace'), make('span', '', observation.trace ? observation.trace.length + ' events' : '0 events'));
-    append(lifecycle, lifeTitle, renderTrace(observation));
-    els.detailContent.appendChild(lifecycle);
-
-    const logs = make('section', 'detail-section');
-    const logTitle = make('div', 'section-title'); append(logTitle, make('h3', '', 'Retained output'), make('span', '', detail.logs && detail.logs.available ? 'live · bounded buffer' : 'not retained'));
-    append(logs, logTitle, renderLogViewer(detail));
-    els.detailContent.appendChild(logs);
+    const workspace = make('div', 'detail-workspace');
+    if (state.detailTab === 'trace') workspace.appendChild(renderTracePanel(observation));
+    else if (state.detailTab === 'output') workspace.appendChild(renderOutputPanel(detail));
+    else workspace.appendChild(renderDetailsPanel(detail, task, observation, preview));
+    els.detailContent.appendChild(workspace);
   }
 
   async function loadLogs(selectedGeneration) {
@@ -838,7 +912,7 @@ const RUNTIME_JS = `
     if (selected && selected.task_handle) { state.taskExpansion[selected.task_handle] = true; saveTaskExpansion(); }
     state.selectedId = execId;
     state.selectedGeneration++;
-    state.detail = null; state.stdoutCursor = null; state.stderrCursor = null; state.stdout = ''; state.stderr = ''; state.logScrollTop = 0;
+    state.detail = null; state.stdoutCursor = null; state.stderrCursor = null; state.stdout = ''; state.stderr = ''; state.logScrollTop = 0; state.detailTab = null; state.detailScroll = { trace: 0, details: 0 };
     history.replaceState(null, '', '#exec=' + encodeURIComponent(execId));
     renderExecutionList();
     els.detailEmpty.classList.remove('hidden');
