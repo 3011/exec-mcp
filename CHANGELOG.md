@@ -2,6 +2,18 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Added lightweight query-time execution timings (`queue_ms`, `transport_startup_ms`, `time_to_first_output_ms`, `runtime_ms`, `termination_ms`, and `total_ms`) to Runtime views and `get_exec_status`.
+- Added deterministic diagnostic fields for coarse lifecycle phase, activity state, conservative failure phase, and last activity/output age.
+
+### Changed
+
+- Runtime Console execution details now show the derived stage timings without adding a telemetry backend or persistent diagnostic state.
+- Diagnostic labels remain evidence-based: quiet output is not treated as a hang, and local transport launch is not treated as proof of SSH handshake or remote process startup.
+
 ## [0.7.0] - 2026-08-30
 
 ### Added

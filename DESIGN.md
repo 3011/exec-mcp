@@ -132,7 +132,7 @@ Default configuration:
 
 `list_active_execs`, `get_exec_status`, and `cancel_exec` are operator-wide tools for a trusted single tenant and do not consume execution slots.
 
-`list_active_execs` includes queued and running jobs, queue position, execution class, and sync/async/global capacity. `get_exec_status` combines lifecycle state with incremental retained output. Stdout and stderr use independent absolute cursors. `has_more_*` means another retained page exists; `*_log_truncated` means earlier bytes have already been permanently discarded by the bounded log buffer. `wait_seconds` is a bounded long-poll and never exceeds 30 seconds.
+`list_active_execs` includes queued and running jobs, queue position, execution class, and sync/async/global capacity. `get_exec_status` combines lifecycle state with incremental retained output plus lightweight `timings` and `diagnostics`. Those diagnostics are pure query-time derivations from timestamps already captured by the Runtime Observer; no extra execution-state machine, worker, timer, telemetry backend, or database is introduced. Stdout and stderr use independent absolute cursors. `has_more_*` means another retained page exists; `*_log_truncated` means earlier bytes have already been permanently discarded by the bounded log buffer. `wait_seconds` is a bounded long-poll and never exceeds 30 seconds.
 
 Status records contain sanitized operational metadata rather than full commands or environment mappings. Raw environment values are not stored in job metadata, history, list output, or lifecycle logs. Retained Job Manager output additionally masks submitted environment values if a command prints them.
 
@@ -147,7 +147,7 @@ The primary runtime objects are an explicit Task Context and its Executions, nev
 
 `last_activity_at` is refreshed by lifecycle transitions, output, and the existing runner heartbeat. `last_output_at` changes only when stdout/stderr bytes are observed. This distinction lets the UI state that an execution is still active while also showing a long quiet period without claiming that the workload is stuck.
 
-Trace events are metadata-only and bounded. They intentionally avoid raw request arguments, environment values, and output payloads. Retained output shown by the console comes from the same bounded, environment-aware redacted Job Manager buffers used by `get_exec_status`.
+Trace events are metadata-only and bounded. They intentionally avoid raw request arguments, environment values, and output payloads. Retained output shown by the console comes from the same bounded, environment-aware redacted Job Manager buffers used by `get_exec_status`. Derived timing/diagnostic fields intentionally remain conservative: `quiet`/`long_quiet` describe observed output activity rather than claiming a hang, failure phase is a coarse lifecycle location rather than root-cause analysis, and local transport launch does not imply SSH handshake or remote-process confirmation.
 
 `task_handle` is now the explicit cross-call grouping contract. The server issues it through `begin_task`; callers must reuse it across `exec`/`start_exec` calls in the same logical task. Unknown handles are rejected rather than silently trusted. The Runtime Console groups executions by task context and shows both the human-readable task label and opaque handle. This handle is correlation state, not authorization, and task contexts remain bounded/process-local.
 

@@ -124,6 +124,19 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
     assert.ok(detail.observation.last_activity_at);
     assert.ok(detail.observation.last_output_at);
     assert.ok(detail.observation.stdout_bytes > 0);
+    assert.equal(detail.diagnostics.phase, 'finished');
+    assert.equal(detail.diagnostics.activity, 'unknown');
+    assert.equal(detail.diagnostics.failure_phase, null);
+    assert.ok(detail.timings.queue_ms >= 0);
+    assert.ok(detail.timings.transport_startup_ms >= 0);
+    assert.ok(detail.timings.time_to_first_output_ms >= 0);
+    assert.ok(detail.timings.runtime_ms >= 0);
+    assert.ok(detail.timings.total_ms >= detail.timings.runtime_ms);
+
+    const status = await mcpCall(base, 902, 'get_exec_status', { exec_id: execId }, session);
+    assert.equal(status.result.structuredContent.diagnostics.phase, 'finished');
+    assert.equal(status.result.structuredContent.diagnostics.failure_phase, null);
+    assert.deepEqual(status.result.structuredContent.timings, detail.timings);
 
     const events = detail.observation.trace.map((event) => event.event);
     for (const expected of ['tool_request_received', 'request_validated', 'job_registered', 'queued', 'starting', 'transport_started', 'execution_running', 'first_output', 'transport_closed', 'completed']) {

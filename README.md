@@ -36,7 +36,7 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 | `exec` | Run one bounded non-interactive command synchronously through the Job Manager; MCP callers must provide a `task_handle`. |
 | `start_exec` | Submit one bounded background command with a `task_handle` and immediately return a queryable `exec_id`. |
 | `list_active_execs` | List queued and running remote executions plus sync/async/global admission capacity. |
-| `get_exec_status` | Read status plus incremental redacted stdout/stderr with independent cursors and bounded long-polling. |
+| `get_exec_status` | Read status, lightweight derived timings/diagnostics, and incremental redacted stdout/stderr with independent cursors and bounded long-polling. |
 | `cancel_exec` | Idempotently cancel a queued or running execution; terminal states are immutable. |
 | `import_chatgpt_file` | Transfer a current ChatGPT file into the remote environment with SHA-256 verification and atomic commit. |
 | `export_remote_file` | Transfer one verified remote file to ChatGPT as an embedded resource for host-side materialization into `/mnt/data`; oversized files are rejected. |
@@ -127,7 +127,9 @@ npm start
 
 `GET /runtime` serves a dependency-free, read-only execution viewer from the main listener. It is intentionally not exposed by the optional `METRICS_PORT` listener and provides no run, retry, cancel, kill, or other mutation endpoint.
 
-The console focuses on current execution state rather than historical metrics: running/queued jobs, capacity, last runtime activity, last output time, retained stdout/stderr, origin metadata, and a bounded lifecycle trace. Activity and output are deliberately separate signals: a job can remain alive and observable while producing no output. Quiet periods are never labeled as hung or stuck without proof.
+The console focuses on current execution state rather than historical metrics: running/queued jobs, capacity, last runtime activity, last output time, retained stdout/stderr, origin metadata, a bounded lifecycle trace, and small lifecycle timing diagnostics. Activity and output are deliberately separate signals: a job can remain alive and observable while producing no output. Quiet periods are never labeled as hung or stuck without proof.
+
+Lifecycle timings and diagnostics are derived at query time from timestamps the Runtime Observer already records; they add no timers, background workers, database, or persistent state. The derived fields cover queue wait, local transport/runner launch, time to first output, runtime, termination, total duration, coarse phase/activity, and a conservative failure phase. `transport_startup_ms` describes local runner/transport launch only and does not claim that SSH handshake or remote process startup has completed.
 
 Trace origin records only facts the server actually receives. An MCP transport session identifier may be shown, but it is explicitly not treated as a ChatGPT conversation identifier. MCP executions now carry a server-issued explicit `task_handle` created by `begin_task`; the Runtime Console groups executions by that handle and displays the optional task label. The handle is a logical correlation context, not proof of ChatGPT's internal conversation ID.
 
@@ -166,7 +168,7 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 - Stderr output alone does not indicate failure. A non-zero exit code, signal, or timeout does.
 - Once the forwarding limit is reached, output is still drained so the child process cannot block on a full pipe.
 - Synchronous exec keeps bounded final stdout/stderr tails for compatibility.
-- get_exec_status reads bounded retained Job Manager logs incrementally with independent stdout/stderr cursors. has_more_* means another retained page is available; *_log_truncated means older bytes were permanently discarded.
+- get_exec_status reads bounded retained Job Manager logs incrementally with independent stdout/stderr cursors. It also returns query-time `timings` and `diagnostics` derived from existing lifecycle timestamps so an agent can distinguish queue, launch, running, quiet, and termination phases without a separate tracing service. `has_more_*` means another retained page is available; `*_log_truncated` means older bytes were permanently discarded.
 - Runtime timeout starts only when a queued job enters execution; queue waiting time does not consume timeout_seconds.
 - V1 Job Manager state and retained logs are process-local; service restart does not recover prior queued or running records.
 

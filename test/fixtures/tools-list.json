@@ -606,7 +606,7 @@
       {
         "name": "get_exec_status",
         "title": "Get remote execution status",
-        "description": "Read one Job Manager execution by exec_id and optionally long-poll for a terminal state. This is the primary synchronization/follow-up tool for start_exec: prefer calling it when independent work is finished or a job result is needed, rather than immediately busy-polling after submission. Incremental stdout/stderr use independent absolute cursors so repeated calls do not resend complete logs. wait_seconds is bounded by the server and never turns this tool into an unbounded wait.",
+        "description": "Read one Job Manager execution by exec_id and optionally long-poll for a terminal state. This is the primary synchronization/follow-up tool for start_exec: prefer calling it when independent work is finished or a job result is needed, rather than immediately busy-polling after submission. The response includes lightweight derived timings and deterministic diagnostics so callers can distinguish queue, startup, execution and termination issues without inferring from logs alone. Incremental stdout/stderr use independent absolute cursors so repeated calls do not resend complete logs. wait_seconds is bounded by the server and never turns this tool into an unbounded wait.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1033,6 +1033,130 @@
               "type": "string",
               "description": "Requested execution identifier when found=false."
             },
+            "timings": {
+              "type": "object",
+              "description": "Durations derived from existing lifecycle timestamps; unavailable phases are null and no additional timing state is stored.",
+              "properties": {
+                "queue_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Time from queued to starting."
+                },
+                "transport_startup_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Time from scheduler starting until the local transport process reaches runner running state. This does not prove SSH handshake completion or remote process startup."
+                },
+                "time_to_first_output_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Time from runner running state to first stdout/stderr output; this can include transport connection, remote shell/application startup, and application silence."
+                },
+                "runtime_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Execution running time until abort request, terminal completion, or current query time."
+                },
+                "termination_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Time from abort request to terminal finalization when an abort occurred."
+                },
+                "total_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Total age from job registration to terminal completion or current query time."
+                }
+              },
+              "required": [
+                "queue_ms",
+                "transport_startup_ms",
+                "time_to_first_output_ms",
+                "runtime_ms",
+                "termination_ms",
+                "total_ms"
+              ],
+              "additionalProperties": false
+            },
+            "diagnostics": {
+              "type": "object",
+              "description": "Small deterministic diagnostic classification derived only from observable lifecycle facts; it does not claim that a process is hung or stuck.",
+              "properties": {
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "queued",
+                    "starting",
+                    "running",
+                    "terminating",
+                    "finished"
+                  ],
+                  "description": "Current coarse execution lifecycle phase."
+                },
+                "activity": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "quiet",
+                    "long_quiet",
+                    "unknown"
+                  ],
+                  "description": "Output/activity classification. quiet and long_quiet describe observation, not a hang diagnosis."
+                },
+                "failure_phase": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "transport",
+                    "execution",
+                    "termination",
+                    null
+                  ],
+                  "description": "Coarse lifecycle phase containing the failure when terminal evidence is sufficient; this is not a root-cause claim. null otherwise."
+                },
+                "last_activity_age_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Age of the most recent observed lifecycle/output activity at query or completion time."
+                },
+                "last_output_age_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Age of the most recent observed stdout/stderr output at query or completion time."
+                }
+              },
+              "required": [
+                "phase",
+                "activity",
+                "failure_phase",
+                "last_activity_age_ms",
+                "last_output_age_ms"
+              ],
+              "additionalProperties": false
+            },
             "logs_available": {
               "type": "boolean",
               "description": "Whether incremental logs are still retained by this Job Manager instance."
@@ -1276,6 +1400,8 @@
                 "found",
                 "source",
                 "task",
+                "timings",
+                "diagnostics",
                 "logs_available",
                 "stdout",
                 "stderr",
@@ -1481,6 +1607,8 @@
                 "found",
                 "source",
                 "task",
+                "timings",
+                "diagnostics",
                 "logs_available",
                 "stdout",
                 "stderr",

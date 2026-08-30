@@ -278,7 +278,7 @@ button { color: inherit; }
 .detail-empty { height:100%; padding:50px; }.detail-empty p { max-width:300px; margin-top:6px; line-height:1.55; }.empty-orbit { width:54px;height:54px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;margin-bottom:18px;position:relative}.empty-orbit:after{content:"";position:absolute;width:68px;height:24px;border:1px solid var(--line-soft);border-radius:50%;transform:rotate(-24deg)}.empty-orbit span{width:8px;height:8px;border-radius:50%;background:var(--text-3)}
 .detail-section { padding:18px 20px; border-bottom:1px solid var(--line-soft); }.detail-section:last-child{border-bottom:0}.detail-overview { padding-top:20px; }.detail-title-row { justify-content:space-between; align-items:flex-start; gap:16px; }.detail-title { min-width:0; }.detail-title h2 { font-size:18px; line-height:1.25; margin:7px 0 5px; letter-spacing:-.02em; overflow-wrap:anywhere; }.detail-title .mono-line { color:var(--text-3); font:11px/1.45 var(--mono); overflow-wrap:anywhere; }
 .big-state { display:inline-flex; gap:7px; align-items:center; font:650 10px/1 var(--sans); letter-spacing:.05em; text-transform:uppercase; }.big-state .status-dot{width:7px;height:7px}.detail-duration { color:var(--text-2); font:12px/1 var(--mono); white-space:nowrap; padding-top:3px; }
-.detail-grid { margin-top:18px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:var(--line-soft); }.metric { min-height:70px; padding:12px; background:var(--surface-2); }.metric span { display:block; color:var(--text-3); font-size:10px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:7px; }.metric strong { font:500 12px/1.3 var(--mono); overflow-wrap:anywhere; }
+.detail-grid { margin-top:18px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:var(--line-soft); }.metric { min-height:70px; padding:12px; background:var(--surface-2); }.metric span { display:block; color:var(--text-3); font-size:10px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:7px; }.metric strong { font:500 12px/1.3 var(--mono); overflow-wrap:anywhere; }.timing-grid{margin-top:0}.timing-grid .metric{min-height:60px}
 .section-title { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:13px; }.section-title h3 { margin:0; font-size:12px; font-weight:650; }.section-title span { color:var(--text-3); font-size:10px; }
 .meta-stack { display:grid; gap:9px; }.meta-line { min-width:0; gap:10px; }.meta-key { color:var(--text-3); width:92px; flex:0 0 92px; font-size:11px; }.meta-value { color:var(--text-2); font:11px/1.4 var(--mono); min-width:0; overflow-wrap:anywhere; }.meta-value.command { padding:8px 9px; border:1px solid var(--line-soft); border-radius:7px; background:var(--surface-2); width:100%; }
 .trace { position:relative; display:grid; gap:0; }.trace-event { display:grid; grid-template-columns:86px 14px minmax(0,1fr); gap:9px; min-height:42px; }.trace-time { color:var(--text-3); font:10px/18px var(--mono); text-align:right; padding-top:1px; }.trace-rail { position:relative; display:flex; justify-content:center; }.trace-rail:before { content:""; position:absolute; top:12px; bottom:-12px; width:1px; background:var(--line); }.trace-event:last-child .trace-rail:before { display:none; }.trace-dot { width:7px;height:7px;border-radius:50%;background:var(--text-3);margin-top:6px;z-index:1;box-shadow:0 0 0 3px var(--surface); }.trace-event.info .trace-dot{background:var(--green)}.trace-event.warning .trace-dot{background:var(--amber)}.trace-event.error .trace-dot{background:var(--red)}.trace-copy strong { display:block; font-size:11px; font-weight:580; line-height:18px; }.trace-copy span { color:var(--text-3); font:10px/1.4 var(--mono); display:block; overflow-wrap:anywhere; }
@@ -378,6 +378,16 @@ const RUNTIME_JS = `
   function durationFor(item) {
     if (item.lifecycle === 'active') return formatDuration(Number(item.elapsed_seconds || 0) * 1000);
     return formatDuration(item.duration_ms);
+  }
+
+  function formatTiming(ms) {
+    if (ms === null || ms === undefined || !Number.isFinite(Number(ms))) return '—';
+    const value = Math.max(0, Number(ms));
+    if (value < 1) return '<1 ms';
+    if (value < 1000) return Math.round(value) + ' ms';
+    if (value < 10000) return (value / 1000).toFixed(2) + ' s';
+    if (value < 60000) return (value / 1000).toFixed(1) + ' s';
+    return formatDuration(value);
   }
 
   function formatBytes(value) {
@@ -725,6 +735,26 @@ const RUNTIME_JS = `
     );
     overview.appendChild(grid);
     els.detailContent.appendChild(overview);
+
+    const timings = detail.timings || {};
+    const diagnostics = detail.diagnostics || {};
+    const timingSection = make('section', 'detail-section');
+    const timingTitle = make('div', 'section-title');
+    const phaseParts = [];
+    if (diagnostics.phase) phaseParts.push(statusLabel(diagnostics.phase));
+    if (diagnostics.failure_phase) phaseParts.push('failure: ' + statusLabel(diagnostics.failure_phase));
+    append(timingTitle, make('h3', '', 'Execution timings'), make('span', '', phaseParts.join(' · ') || 'derived from lifecycle timestamps'));
+    const timingGrid = make('div', 'detail-grid timing-grid');
+    append(timingGrid,
+      metric('Queue', formatTiming(timings.queue_ms)),
+      metric('Transport launch', formatTiming(timings.transport_startup_ms)),
+      metric('First output', formatTiming(timings.time_to_first_output_ms)),
+      metric('Runtime', formatTiming(timings.runtime_ms)),
+      metric('Termination', formatTiming(timings.termination_ms)),
+      metric('Total', formatTiming(timings.total_ms))
+    );
+    append(timingSection, timingTitle, timingGrid);
+    els.detailContent.appendChild(timingSection);
 
     const identity = make('section', 'detail-section');
     const identityTitle = make('div', 'section-title'); append(identityTitle, make('h3', '', 'Identity & origin'), make('span', '', 'observable facts only'));

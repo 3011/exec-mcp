@@ -20,6 +20,32 @@ export interface RuntimeTraceEvent {
   detail: string | null;
 }
 
+export type RuntimeDiagnosticPhase = 'queued' | 'starting' | 'running' | 'terminating' | 'finished';
+export type RuntimeDiagnosticActivity = 'active' | 'quiet' | 'long_quiet' | 'unknown';
+export type RuntimeFailurePhase = 'transport' | 'execution' | 'termination';
+
+export interface RuntimeExecutionTimings {
+  queue_ms: number | null;
+  transport_startup_ms: number | null;
+  time_to_first_output_ms: number | null;
+  runtime_ms: number | null;
+  termination_ms: number | null;
+  total_ms: number;
+}
+
+export interface RuntimeExecutionDiagnostics {
+  phase: RuntimeDiagnosticPhase;
+  activity: RuntimeDiagnosticActivity;
+  failure_phase: RuntimeFailurePhase | null;
+  last_activity_age_ms: number | null;
+  last_output_age_ms: number | null;
+}
+
+export interface RuntimeDerivedDiagnostics {
+  timings: RuntimeExecutionTimings;
+  diagnostics: RuntimeExecutionDiagnostics;
+}
+
 export interface RuntimeExecutionObservation {
   exec_id: string;
   trace_id: string;
@@ -296,4 +322,102 @@ export function runtimeStateLevel(state: ExecutionState | FinalExecutionState): 
   if (state === 'completed' || state === 'running' || state === 'starting' || state === 'queued') return 'info';
   if (state === 'cancelled' || state === 'cancel_aborting' || state === 'client_closed_aborting') return 'warning';
   return 'error';
+}
+
+export function deriveRuntimeDiagnostics(
+  task: PublicActiveExecution | ExecutionHistoryRecord,
+  observation: RuntimeExecutionObservation | null,
+  now = Date.now()
+): RuntimeDerivedDiagnostics {
+  const createdAt = parseTime(observation?.created_at) ?? parseTime(task.created_at) ?? now;
+  const queuedAt = traceTime(observation, 'queued') ?? createdAt;
+  const startingAt = traceTime(observation, 'starting');
+  const runningAt = traceTime(observation, 'execution_running') ?? parseTime(task.running_at);
+  const firstOutputAt = parseTime(observation?.first_output_at) ?? traceTime(observation, 'first_output');
+  const abortAt = traceTime(observation, 'abort_requested');
+  const finishedAt = 'finished_at' in task ? parseTime(task.finished_at) : null;
+  const referenceAt = finishedAt ?? now;
+  const runtimeEndAt = abortAt ?? finishedAt ?? (runningAt !== null ? now : null);
+
+  const timings: RuntimeExecutionTimings = {
+    queue_ms: deltaMs(queuedAt, startingAt),
+    transport_startup_ms: deltaMs(startingAt, runningAt),
+    time_to_first_output_ms: deltaMs(runningAt, firstOutputAt),
+    runtime_ms: deltaMs(runningAt, runtimeEndAt),
+    termination_ms: deltaMs(abortAt, finishedAt),
+    total_ms: Math.max(0, referenceAt - createdAt)
+  };
+
+  const lastActivityAt = parseTime(observation?.last_activity_at);
+  const lastOutputAt = parseTime(observation?.last_output_at);
+  const diagnostics: RuntimeExecutionDiagnostics = {
+    phase: diagnosticPhase(task),
+    activity: diagnosticActivity(task, lastActivityAt, lastOutputAt, referenceAt),
+    failure_phase: diagnosticFailurePhase(task, observation),
+    last_activity_age_ms: ageMs(lastActivityAt, referenceAt),
+    last_output_age_ms: ageMs(lastOutputAt, referenceAt)
+  };
+
+  return { timings, diagnostics };
+}
+
+function diagnosticPhase(task: PublicActiveExecution | ExecutionHistoryRecord): RuntimeDiagnosticPhase {
+  if ('final_state' in task) return 'finished';
+  if (task.state === 'queued') return 'queued';
+  if (task.state === 'starting') return 'starting';
+  if (task.state === 'running') return 'running';
+  return 'terminating';
+}
+
+function diagnosticActivity(
+  task: PublicActiveExecution | ExecutionHistoryRecord,
+  lastActivityAt: number | null,
+  lastOutputAt: number | null,
+  referenceAt: number
+): RuntimeDiagnosticActivity {
+  if ('final_state' in task || task.state === 'queued' || task.state === 'starting') return 'unknown';
+  if (lastOutputAt !== null) {
+    const age = Math.max(0, referenceAt - lastOutputAt);
+    if (age <= 15_000) return 'active';
+    if (age <= 300_000) return 'quiet';
+    return 'long_quiet';
+  }
+  if (lastActivityAt === null) return 'unknown';
+  return Math.max(0, referenceAt - lastActivityAt) <= 300_000 ? 'quiet' : 'long_quiet';
+}
+
+function diagnosticFailurePhase(
+  task: PublicActiveExecution | ExecutionHistoryRecord,
+  observation: RuntimeExecutionObservation | null
+): RuntimeFailurePhase | null {
+  if (!('final_state' in task)) return null;
+  if (task.final_state === 'completed' || task.final_state === 'cancelled' || task.final_state === 'client_closed') return null;
+  if (task.final_state === 'unconfirmed_reaped' || task.failure_reason === 'executor_restarted') return 'termination';
+  if (task.final_state === 'spawn_failed') return 'transport';
+  if (task.final_state === 'timed_out') return 'execution';
+  const reachedTransport = traceTime(observation, 'transport_started') !== null;
+  const reachedRunning = traceTime(observation, 'execution_running') !== null || parseTime(task.running_at) !== null;
+  if (!reachedTransport || !reachedRunning) return 'transport';
+  return 'execution';
+}
+
+function traceTime(observation: RuntimeExecutionObservation | null, event: string): number | null {
+  if (!observation) return null;
+  const match = observation.trace.find((item) => item.event === event);
+  return match ? parseTime(match.at) : null;
+}
+
+function parseTime(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function deltaMs(start: number | null, end: number | null): number | null {
+  if (start === null || end === null || end < start) return null;
+  return end - start;
+}
+
+function ageMs(at: number | null, referenceAt: number): number | null {
+  return at === null ? null : Math.max(0, referenceAt - at);
 }

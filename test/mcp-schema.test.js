@@ -81,6 +81,11 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.ok(getStatus.inputSchema.properties.stderr_cursor);
     assert.ok(getStatus.outputSchema.properties.has_more_stdout);
     assert.ok(getStatus.outputSchema.properties.stdout_log_truncated);
+    assert.ok(getStatus.outputSchema.properties.timings);
+    assert.deepEqual(getStatus.outputSchema.properties.timings.required, ['queue_ms', 'transport_startup_ms', 'time_to_first_output_ms', 'runtime_ms', 'termination_ms', 'total_ms']);
+    assert.deepEqual(getStatus.outputSchema.properties.diagnostics.properties.phase.enum, ['queued', 'starting', 'running', 'terminating', 'finished']);
+    assert.deepEqual(getStatus.outputSchema.properties.diagnostics.properties.activity.enum, ['active', 'quiet', 'long_quiet', 'unknown']);
+    assert.match(getStatus.description, /lightweight derived timings and deterministic diagnostics/);
     assert.equal(cancelExec.title, 'Cancel remote execution');
     assert.deepEqual(cancelExec.outputSchema.properties.result.enum, ['accepted', 'idempotent', 'conflicting_abort_reason', 'already_finished', 'exec_not_found']);
     assert.match(cancelExec.outputSchema.properties.accepted.description, /does not confirm process exit/);

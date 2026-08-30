@@ -9,7 +9,7 @@ import { JobOutputRedactor } from './job-output-redactor.js';
 import { redact } from './redact.js';
 import { ExecRegistry, ExecutionCircuitOpenError } from './exec-registry.js';
 import type { AbortReason, ExecutionClass, ExecutionHistoryRecord, ExecutionRecord, ExecutionState, FinalExecutionState } from './exec-registry.js';
-import { RuntimeObserver, runtimeStateLevel } from './runtime-observer.js';
+import { RuntimeObserver, deriveRuntimeDiagnostics, runtimeStateLevel } from './runtime-observer.js';
 import type { RuntimeOrigin } from './runtime-observer.js';
 import { TaskContextStore, TASK_HANDLE_PATTERN } from './task-context.js';
 import type { TaskContext } from './task-context.js';
@@ -702,7 +702,8 @@ export class ExecRunner {
       ? { ...state.task, queue_position: this.queuePosition(execId) }
       : state.task;
     const output = this.readJobOutput(job, stdoutCursor, stderrCursor, maxOutputBytes);
-    return { ...state, task, ...output };
+    const observation = this.runtimeObserver.get(execId);
+    return { ...state, task, ...output, ...deriveRuntimeDiagnostics(task, observation) };
   }
 
   runtimeOverview(now = Date.now()) {
@@ -740,16 +741,20 @@ export class ExecRunner {
 
   runtimeListExecutions(limit = this.config.recentHistoryLimit) {
     const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
-    const active = this.registry.listActive().map((task) => ({
-      ...task,
-      queue_position: this.queuePosition(task.exec_id),
-      lifecycle: 'active' as const,
-      finished_at: null,
-      duration_ms: null,
-      final_state: null,
-      ...this.runtimeObserver.fields(task.exec_id),
-      task_context: this.taskContexts.get(task.task_handle)
-    }));
+    const active = this.registry.listActive().map((rawTask) => {
+      const task = { ...rawTask, queue_position: this.queuePosition(rawTask.exec_id) };
+      const observation = this.runtimeObserver.get(task.exec_id);
+      return {
+        ...task,
+        lifecycle: 'active' as const,
+        finished_at: null,
+        duration_ms: null,
+        final_state: null,
+        ...this.runtimeObserver.fields(task.exec_id),
+        ...deriveRuntimeDiagnostics(task, observation),
+        task_context: this.taskContexts.get(task.task_handle)
+      };
+    });
     const seen = new Set(active.map((task) => task.exec_id));
     const finished: Array<Record<string, unknown> & { exec_id: string; created_at: string }> = [];
     const candidates = [
@@ -767,6 +772,7 @@ export class ExecRunner {
         cwd: observation?.cwd ?? null,
         command_preview: observation?.command_preview ?? null,
         ...this.runtimeObserver.fields(task.exec_id),
+        ...deriveRuntimeDiagnostics(task, observation),
         task_context: this.taskContexts.get(task.task_handle)
       });
     }
@@ -782,12 +788,14 @@ export class ExecRunner {
     const task = state.source === 'active'
       ? { ...state.task, queue_position: this.queuePosition(execId), ...this.runtimeObserver.fields(execId) }
       : { ...state.task, ...this.runtimeObserver.fields(execId) };
+    const observation = this.runtimeObserver.get(execId);
     return {
       found: true as const,
       source: state.source,
       task,
       task_context: this.taskContexts.get(task.task_handle),
-      observation: this.runtimeObserver.get(execId),
+      observation,
+      ...deriveRuntimeDiagnostics(state.task, observation),
       logs: job ? {
         available: true,
         stdout_start_cursor: job.stdoutLog.startCursor,
