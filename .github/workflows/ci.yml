@@ -32,14 +32,8 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Strict TypeScript build
-        run: npm run build
-
-      - name: Unit tests
-        run: npm run test:compiled
-
-      - name: Memory smoke test
-        run: bash scripts/memory-smoke.sh
+      - name: Validate
+        run: npm run validate
 
   docker:
     name: Docker image

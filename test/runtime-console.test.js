@@ -67,6 +67,14 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.match(body, /<h2>Tasks<\/h2>/);
     assert.doesNotMatch(body, /LIVE OBSERVABILITY|What is running right now\?|Read-only visibility into task contexts/);
 
+    const css = await fetch(`${base}/runtime/assets/app.css`);
+    assert.equal(css.status, 200);
+    const stylesheet = await css.text();
+    assert.match(stylesheet, /\.app-shell \{[^}]*height:100dvh[^}]*overflow:hidden/);
+    assert.match(stylesheet, /\.workspace \{[^}]*flex:1 1 0[^}]*grid-template-rows:minmax\(0,1fr\)[^}]*overflow:hidden/);
+    assert.match(stylesheet, /\.execution-list \{[^}]*min-height:0[^}]*overflow:auto/);
+    assert.match(stylesheet, /@media \(max-width:1050px\)\{\.app-shell\{height:auto;min-height:100dvh;overflow:visible/);
+
     const js = await fetch(`${base}/runtime/assets/app.js`);
     assert.equal(js.status, 200);
     const script = await js.text();

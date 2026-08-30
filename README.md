@@ -127,7 +127,7 @@ npm start
 
 `GET /runtime` serves a dependency-free, read-only execution viewer from the main listener. It is intentionally not exposed by the optional `METRICS_PORT` listener and provides no run, retry, cancel, kill, or other mutation endpoint.
 
-The console focuses on current execution state rather than historical metrics: running/queued jobs, capacity, last runtime activity, last output time, retained stdout/stderr, origin metadata, a bounded lifecycle trace, and small lifecycle timing diagnostics. Activity and output are deliberately separate signals: a job can remain alive and observable while producing no output. Quiet periods are never labeled as hung or stuck without proof.
+The console focuses on current execution state rather than historical metrics: running/queued jobs, capacity, last runtime activity, last output time, retained stdout/stderr, origin metadata, a bounded lifecycle trace, and small lifecycle timing diagnostics. Executions are grouped under explicit Task Contexts. Activity and output are deliberately separate signals: a job can remain alive and observable while producing no output. Quiet periods are never labeled as hung or stuck without proof.
 
 Lifecycle timings and diagnostics are derived at query time from timestamps the Runtime Observer already records; they add no timers, background workers, database, or persistent state. The derived fields cover queue wait, local transport/runner launch, time to first output, runtime, termination, total duration, coarse phase/activity, and a conservative failure phase. `transport_startup_ms` describes local runner/transport launch only and does not claim that SSH handshake or remote process startup has completed.
 
@@ -242,12 +242,12 @@ Secure MCP Tunnel carries the embedded bytes inside MCP JSON-RPC, so remote-to-C
 npm test             # strict build and regression tests
 npm run build        # strict type-check and compile to dist/
 npm run test:memory  # bounded-output and RSS smoke test
-npm run validate     # tests, HTTP/SSE, and memory smoke tests
+npm run validate     # canonical gate: build, tests, Runtime/HTTP/SSE, and memory smoke tests
 ```
 
 Runtime source is organized by responsibility: `server.ts` for HTTP composition and lifecycle, `mcp-handler.ts` for JSON-RPC dispatch, `tool-schemas.ts` for stable schemas, `artifact-transfer.ts` for verified bidirectional file transfer, `runtime-observer.ts` for bounded execution observations/traces, `runtime-console.ts` for the read-only browser surface, and `metrics.ts` for Prometheus rendering.
 
-CI runs the test suite and builds the container. CodeQL and Dependabot configuration are included in the repository.
+CI runs the same `npm run validate` gate used for local release checks before building the container. The compiled Node test runner uses a bounded file-level concurrency of 4 to reduce timing contention in process/HTTP lifecycle tests. CodeQL and Dependabot configuration are included in the repository.
 
 ## Documentation
 
