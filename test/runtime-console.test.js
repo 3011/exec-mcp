@@ -77,7 +77,9 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.match(script, /execution-command/);
     assert.match(script, /detail-tabs/);
     assert.match(script, /defaultDetailTab/);
-    assert.match(script, /Advanced metadata/);
+    assert.doesNotMatch(script, /Advanced metadata/);
+    assert.match(script, /summary-metric-grid/);
+    assert.match(script, /details-card/);
     assert.match(script, /captureDetailScroll/);
 
     const denied = await fetch(`${base}/runtime/api/overview`, { method: 'POST' });
