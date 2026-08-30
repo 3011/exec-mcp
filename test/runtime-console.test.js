@@ -82,7 +82,11 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
   await withServer(async (base) => {
     const secret = 'runtime-super-secret-93817';
     const session = 'chatgpt-transport-session-test';
+    const begun = await mcpCall(base, 900, 'begin_task', { label: 'runtime task grouping' }, session);
+    const taskHandle = begun.result.structuredContent.task_handle;
+    assert.match(taskHandle, /^task-/);
     const started = await mcpCall(base, 901, 'start_exec', {
+      task_handle: taskHandle,
       command: 'printf "hello-runtime\\n%s\\n" "$RUNTIME_SECRET"; sleep 0.12; printf "done\\n"',
       cwd: '/tmp',
       env: { RUNTIME_SECRET: secret },
@@ -99,14 +103,18 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
     assert.equal(listed.origin.tool, 'start_exec');
     assert.equal(listed.origin.transport_session_id, session);
     assert.equal(listed.origin.request_id, 'number:901');
-    assert.equal(listed.origin.task_handle, null);
+    assert.equal(listed.origin.task_handle, taskHandle);
+    assert.equal(listed.task_handle, taskHandle);
+    assert.equal(listed.task_context.label, 'runtime task grouping');
     assert.match(listed.trace_id, /^trace-/);
     assert.doesNotMatch(JSON.stringify(listed), new RegExp(secret));
 
     const detail = await waitForFinished(base, execId);
     assert.equal(detail.found, true);
     assert.equal(detail.task.status, 'completed');
-    assert.equal(detail.observation.origin.task_handle, null);
+    assert.equal(detail.observation.origin.task_handle, taskHandle);
+    assert.equal(detail.task.task_handle, taskHandle);
+    assert.equal(detail.task_context.task_handle, taskHandle);
     assert.ok(detail.observation.last_activity_at);
     assert.ok(detail.observation.last_output_at);
     assert.ok(detail.observation.stdout_bytes > 0);
@@ -142,5 +150,52 @@ test('Runtime overview is observation-only and leaves existing MCP and metrics s
     const metrics = await fetch(`${base}/metrics`);
     assert.equal(metrics.status, 200);
     assert.match(await metrics.text(), /exec_mcp_requests_total/);
+  });
+});
+
+test('explicit task handles isolate concurrent ChatGPT task groups and reject unknown handles', async () => {
+  await withServer(async (base) => {
+    const sessionA = 'chat-window-a';
+    const sessionB = 'chat-window-b';
+    const taskA = (await mcpCall(base, 1001, 'begin_task', { label: 'Window A task' }, sessionA)).result.structuredContent;
+    const taskB = (await mcpCall(base, 2001, 'begin_task', { label: 'Window B task' }, sessionB)).result.structuredContent;
+    assert.notEqual(taskA.task_handle, taskB.task_handle);
+
+    const unknown = await mcpCall(base, 1002, 'start_exec', {
+      task_handle: 'task-11111111-1111-4111-8111-111111111111',
+      command: 'true', cwd: '/tmp'
+    }, sessionA);
+    assert.equal(unknown.result.isError, true);
+    assert.equal(unknown.result.structuredContent.code, 'unknown_task_handle');
+    assert.match(unknown.result.content[0].text, /call begin_task/);
+
+    const a1 = await mcpCall(base, 1003, 'start_exec', {
+      task_handle: taskA.task_handle, command: 'sleep 0.08; printf A1', cwd: '/tmp', label: 'A1'
+    }, sessionA);
+    const a2 = await mcpCall(base, 1004, 'start_exec', {
+      task_handle: taskA.task_handle, command: 'sleep 0.08; printf A2', cwd: '/tmp', label: 'A2'
+    }, sessionA);
+    const b1 = await mcpCall(base, 2002, 'start_exec', {
+      task_handle: taskB.task_handle, command: 'sleep 0.08; printf B1', cwd: '/tmp', label: 'B1'
+    }, sessionB);
+
+    for (const result of [a1, a2, b1]) assert.equal(result.result.isError, false);
+    assert.equal(a1.result.structuredContent.task_handle, taskA.task_handle);
+    assert.equal(a2.result.structuredContent.task_handle, taskA.task_handle);
+    assert.equal(b1.result.structuredContent.task_handle, taskB.task_handle);
+
+    await Promise.all([
+      waitForFinished(base, a1.result.structuredContent.exec_id),
+      waitForFinished(base, a2.result.structuredContent.exec_id),
+      waitForFinished(base, b1.result.structuredContent.exec_id)
+    ]);
+
+    const list = await (await fetch(`${base}/runtime/api/executions?limit=50`)).json();
+    const byId = new Map(list.executions.map((item) => [item.exec_id, item]));
+    assert.equal(byId.get(a1.result.structuredContent.exec_id).task_context.label, 'Window A task');
+    assert.equal(byId.get(a2.result.structuredContent.exec_id).task_context.label, 'Window A task');
+    assert.equal(byId.get(b1.result.structuredContent.exec_id).task_context.label, 'Window B task');
+    assert.equal(byId.get(a1.result.structuredContent.exec_id).task_context.execution_count, 2);
+    assert.equal(byId.get(b1.result.structuredContent.exec_id).task_context.execution_count, 1);
   });
 });

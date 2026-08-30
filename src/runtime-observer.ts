@@ -105,7 +105,7 @@ export class RuntimeObserver {
       tool: input.origin?.tool ?? null,
       transport_session_id: input.origin?.transport_session_id ?? null,
       request_id: input.origin?.request_id ?? null,
-      task_handle: null
+      task_handle: input.origin?.task_handle ?? null
     };
     const observation: MutableObservation = {
       execId: input.execId,

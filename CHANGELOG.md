@@ -2,6 +2,26 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-08-30
+
+### Added
+
+- Added the dependency-free, read-only Runtime Console at `/runtime` with live execution state, retained stdout/stderr, activity/output timestamps, bounded lifecycle traces, responsive dark/light UI, and task-aware execution grouping.
+- Added `begin_task`, which mints a server-issued opaque `task_handle` for explicit cross-call task/conversation correlation.
+- Added task context metadata to active executions, recent history, synchronous/asynchronous execution results, Runtime observations, and Runtime detail views.
+
+### Changed
+
+- MCP `exec` and `start_exec` now require the exact `task_handle` returned by `begin_task`; unknown or forged handles are rejected instead of silently accepted.
+- Runtime Console now groups executions by explicit Task Context rather than attempting to infer ChatGPT conversations from MCP transport sessions.
+- Tool descriptions explicitly instruct agents to call `begin_task` once for a new ChatGPT conversation or logical task and reuse the handle for subsequent execution calls.
+
+### Security
+
+- Runtime Console remains server-side read-only: non-GET `/runtime` requests return `405`, and no run/retry/cancel/kill browser endpoint exists.
+- Task handles are correlation metadata only and do not grant authorization; they remain bounded and process-local.
+- Production container files are explicitly made readable by non-root runtime UIDs while remaining non-writable, preventing checkout file modes from breaking UID/GID 1000 deployments.
+
 ## [0.6.2] - 2026-08-14
 
 ### Changed
@@ -118,7 +138,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - Defaulted SSH host-key checking to strict mode and neutral secret paths.
 - Removed a tracked deployment-specific `known_hosts` file.
 
-[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/3011/exec-mcp/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/3011/exec-mcp/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/3011/exec-mcp/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/3011/exec-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/3011/exec-mcp/compare/v0.5.1...v0.6.0

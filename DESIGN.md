@@ -143,13 +143,13 @@ V1 Job Manager metadata and retained logs are process-local. Service restart doe
 
 The Runtime Console is a separate read-only observation plane on the main HTTP listener. It does not reuse MCP mutation tools and defines no runtime write endpoint. `POST`, `PUT`, `PATCH`, and `DELETE` requests under `/runtime` are rejected; the optional metrics listener does not serve the console.
 
-The primary UI object is an Execution, not a guessed chat session. Each observation owns a generated `trace_id`, bounded lifecycle events, last runtime activity, first/last output timestamps, byte counters, safe execution metadata, and an origin record. MCP origin may include the transport session and typed JSON-RPC request id, but those fields are not interpreted as a ChatGPT conversation identity.
+The primary runtime objects are an explicit Task Context and its Executions, never a guessed transport session. `begin_task` mints an opaque `task_handle`; MCP `exec` and `start_exec` require a currently known server-issued handle and persist it into active/history metadata and Runtime origin. Each execution still owns its own generated `trace_id`, bounded lifecycle events, last runtime activity, first/last output timestamps, byte counters, safe execution metadata, and origin record. MCP transport session and typed JSON-RPC request id remain observable diagnostics only and are not interpreted as ChatGPT conversation identity.
 
 `last_activity_at` is refreshed by lifecycle transitions, output, and the existing runner heartbeat. `last_output_at` changes only when stdout/stderr bytes are observed. This distinction lets the UI state that an execution is still active while also showing a long quiet period without claiming that the workload is stuck.
 
 Trace events are metadata-only and bounded. They intentionally avoid raw request arguments, environment values, and output payloads. Retained output shown by the console comes from the same bounded, environment-aware redacted Job Manager buffers used by `get_exec_status`.
 
-A future client may explicitly provide a stable `task_handle`/conversation handle to group executions across calls. The v1 observation schema reserves this field as `null`; no MCP tool schema or model behavior changes are part of the Runtime Console release.
+`task_handle` is now the explicit cross-call grouping contract. The server issues it through `begin_task`; callers must reuse it across `exec`/`start_exec` calls in the same logical task. Unknown handles are rejected rather than silently trusted. The Runtime Console groups executions by task context and shows both the human-readable task label and opaque handle. This handle is correlation state, not authorization, and task contexts remain bounded/process-local.
 
 ## Circuit breaker
 

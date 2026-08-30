@@ -32,7 +32,9 @@ async function withServer(overrides, fn) {
   }
 }
 
-async function mcp(base, id, name, args = {}) {
+let autoTaskId = 0;
+
+async function rawMcp(base, id, name, args = {}) {
   const response = await fetch(`${base}/mcp`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -40,6 +42,15 @@ async function mcp(base, id, name, args = {}) {
   });
   assert.equal(response.status, 200);
   return await response.json();
+}
+
+async function mcp(base, id, name, args = {}) {
+  let nextArgs = args;
+  if ((name === 'exec' || name === 'start_exec') && !args.task_handle) {
+    const begun = await rawMcp(base, `auto-task-${++autoTaskId}`, 'begin_task', { label: 'test task' });
+    nextArgs = { ...args, task_handle: begun.result.structuredContent.task_handle };
+  }
+  return await rawMcp(base, id, name, nextArgs);
 }
 
 async function waitFor(check, timeoutMs = 5000) {

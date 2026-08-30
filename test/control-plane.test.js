@@ -14,13 +14,24 @@ async function withServer(overrides, fn) {
   finally { instance.runner.registry.close(); await new Promise((resolve) => instance.server.close(resolve)); }
 }
 
-async function mcp(base, id, name, args = {}, headers = {}) {
+let autoTaskId = 0;
+
+async function rawMcp(base, id, name, args = {}, headers = {}) {
   const response = await fetch(`${base}/mcp`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })
   });
   return await response.json();
+}
+
+async function mcp(base, id, name, args = {}, headers = {}) {
+  let nextArgs = args;
+  if ((name === 'exec' || name === 'start_exec') && !args.task_handle) {
+    const begun = await rawMcp(base, `auto-task-${++autoTaskId}`, 'begin_task', { label: 'test task' }, headers);
+    nextArgs = { ...args, task_handle: begun.result.structuredContent.task_handle };
+  }
+  return await rawMcp(base, id, name, nextArgs, headers);
 }
 
 async function waitFor(predicate, timeoutMs = 5000) {
@@ -112,11 +123,12 @@ test('MCP cancelled notification aborts only the matching session request', asyn
 
 test('MCP HTTP disconnect propagates abort and cleans request mapping', async () => {
   await withServer({ KILL_GRACE_SECONDS: '1' }, async (base, { runner, mcpRequests }) => {
+    const taskHandle = (await mcp(base, 'disconnect-task', 'begin_task', { label: 'disconnect task' }, { 'mcp-session-id': 'disconnect-session' })).result.structuredContent.task_handle;
     const controller = new AbortController();
     const request = fetch(`${base}/mcp`, {
       method: 'POST', signal: controller.signal,
       headers: { 'content-type': 'application/json', 'mcp-session-id': 'disconnect-session' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'exec', arguments: { command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 } } })
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'exec', arguments: { task_handle: taskHandle, command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 } } })
     });
     await waitFor(() => runner.active === 1 && mcpRequests.size === 1);
     controller.abort();

@@ -4,9 +4,73 @@
   "result": {
     "tools": [
       {
+        "name": "begin_task",
+        "title": "Begin logical task context",
+        "description": "Call this once before the first exec or start_exec in a new ChatGPT conversation or new logical task. The server returns an opaque task_handle. Reuse that exact task_handle on every subsequent exec and start_exec call that belongs to the same conversation/task. Different ChatGPT windows should create different task handles. This handle is for correlation and Runtime Console grouping; it is not authentication or authorization.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "maxLength": 120,
+              "description": "Optional concise human-readable task label for the Runtime Console. Prefer a short description of the current user goal and do not include secrets."
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "task_handle": {
+              "type": "string",
+              "pattern": "^task-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "description": "Server-issued opaque task handle to pass to exec/start_exec."
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Sanitized task label."
+            },
+            "created_at": {
+              "type": "string",
+              "description": "UTC timestamp when the task context was created."
+            },
+            "last_attached_at": {
+              "type": "string",
+              "description": "UTC timestamp of the most recent execution association; initially equal to created_at."
+            },
+            "execution_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Executions currently associated with this task context."
+            }
+          },
+          "required": [
+            "task_handle",
+            "label",
+            "created_at",
+            "last_attached_at",
+            "execution_count"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "openai/toolInvocation/invoking": "Creating task context",
+          "openai/toolInvocation/invoked": "Task context ready"
+        }
+      },
+      {
         "name": "exec",
         "title": "Run short remote command synchronously",
-        "description": "Run one bounded, non-interactive shell command synchronously and wait for its terminal result. Agent selection guidance: prefer exec only when the command is expected to finish quickly (roughly within 5 seconds) AND the next reasoning or action depends on its result. Typical exec cases are pwd, ls, cat/sed/grep, git status/diff, kubectl get, and other small deterministic probes or edits. For builds, test suites, package installs, image builds, scans, sleeps/waits, commands with uncertain duration, or work that can run in parallel, prefer start_exec so useful agent work can continue while the job runs. Never emulate background execution inside exec with nohup, disown, or a trailing/background ampersand; submit the foreground command through start_exec so Job Manager status, cancellation, timeout, and remote process-group cleanup remain authoritative. Do not use exec merely to wait for an asynchronous job; use get_exec_status at the synchronization point. Internally exec submits a sync job through the same Job Manager and runner used by start_exec, waits for a terminal state, then returns the final summary. Commands are evaluated by /bin/sh -c. The server validates cwd against ALLOWED_CWDS, enforces runtime and output limits, filters environment variables, enforces dedicated sync/global concurrency limits, and terminates the managed remote process group on timeout or cancellation.",
+        "description": "Run one bounded, non-interactive shell command synchronously and wait for its terminal result. Task-context rule: before the first execution in a new ChatGPT conversation/logical task, call begin_task once; then reuse its exact task_handle on every exec/start_exec in that same task. Agent selection guidance: prefer exec only when the command is expected to finish quickly (roughly within 5 seconds) AND the next reasoning or action depends on its result. Typical exec cases are pwd, ls, cat/sed/grep, git status/diff, kubectl get, and other small deterministic probes or edits. For builds, test suites, package installs, image builds, scans, sleeps/waits, commands with uncertain duration, or work that can run in parallel, prefer start_exec so useful agent work can continue while the job runs. Never emulate background execution inside exec with nohup, disown, or a trailing/background ampersand; submit the foreground command through start_exec so Job Manager status, cancellation, timeout, and remote process-group cleanup remain authoritative. Do not use exec merely to wait for an asynchronous job; use get_exec_status at the synchronization point. Internally exec submits a sync job through the same Job Manager and runner used by start_exec, waits for a terminal state, then returns the final summary. Commands are evaluated by /bin/sh -c. The server validates cwd against ALLOWED_CWDS, enforces runtime and output limits, filters environment variables, enforces dedicated sync/global concurrency limits, and terminates the managed remote process group on timeout or cancellation.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -40,10 +104,16 @@
               "type": "string",
               "maxLength": 120,
               "description": "Optional sanitized operator label for status and lifecycle logs. Do not include credentials or secrets."
+            },
+            "task_handle": {
+              "type": "string",
+              "pattern": "^task-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "description": "Required explicit logical-task handle returned by begin_task. Reuse the same handle for every exec/start_exec call in the same ChatGPT conversation or logical task. Never reuse a handle from another conversation/task."
             }
           },
           "required": [
-            "command"
+            "command",
+            "task_handle"
           ],
           "additionalProperties": false
         },
@@ -105,6 +175,13 @@
             "stderr_tail": {
               "type": "string",
               "description": "Bounded, redacted stderr tail."
+            },
+            "task_handle": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Logical task handle associated with this execution. MCP exec calls require a non-null server-issued handle."
             }
           },
           "required": [
@@ -118,7 +195,8 @@
             "truncated",
             "timed_out",
             "stdout_tail",
-            "stderr_tail"
+            "stderr_tail",
+            "task_handle"
           ],
           "additionalProperties": false
         },
@@ -136,7 +214,7 @@
       {
         "name": "start_exec",
         "title": "Start asynchronous remote job",
-        "description": "Submit one bounded remote command as an asynchronous Job Manager job and return as soon as the job is registered. Agent selection guidance: prefer start_exec whenever runtime is unknown, may exceed a few seconds, or the command can run in parallel with other useful work. Typical start_exec cases are builds, test suites, package installs, container/image builds, scans, migrations, long scripts, sleeps/waits, and multiple independent jobs. Pass the real foreground command to start_exec; do not add nohup, disown, or shell backgrounding, because Job Manager itself owns the background lifecycle. When starting several independent jobs, use concise labels so their results are easy to reconcile. Do not use start_exec for trivial probes whose result is required immediately; exec is simpler for those. After start_exec returns, keep the exec_id and continue independent reasoning or tool work instead of immediately high-frequency polling. At a synchronization point, call get_exec_status with the returned cursors and optionally wait_seconds up to 30 seconds; use cancel_exec if the job is no longer needed. Returning exec_id means the job is registered and immediately queryable; it does not mean the command succeeded or has started running. Jobs may be queued before entering the async execution pool. Finalized records remain queryable only while bounded Job Manager/history retention keeps them, and in-memory state is lost on service restart.",
+        "description": "Submit one bounded remote command as an asynchronous Job Manager job and return as soon as the job is registered. Task-context rule: before the first execution in a new ChatGPT conversation/logical task, call begin_task once; then reuse its exact task_handle on every exec/start_exec in that same task. Agent selection guidance: prefer start_exec whenever runtime is unknown, may exceed a few seconds, or the command can run in parallel with other useful work. Typical start_exec cases are builds, test suites, package installs, container/image builds, scans, migrations, long scripts, sleeps/waits, and multiple independent jobs. Pass the real foreground command to start_exec; do not add nohup, disown, or shell backgrounding, because Job Manager itself owns the background lifecycle. When starting several independent jobs, use concise labels so their results are easy to reconcile. Do not use start_exec for trivial probes whose result is required immediately; exec is simpler for those. After start_exec returns, keep the exec_id and continue independent reasoning or tool work instead of immediately high-frequency polling. At a synchronization point, call get_exec_status with the returned cursors and optionally wait_seconds up to 30 seconds; use cancel_exec if the job is no longer needed. Returning exec_id means the job is registered and immediately queryable; it does not mean the command succeeded or has started running. Jobs may be queued before entering the async execution pool. Finalized records remain queryable only while bounded Job Manager/history retention keeps them, and in-memory state is lost on service restart.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -170,10 +248,16 @@
               "type": "string",
               "maxLength": 120,
               "description": "Optional sanitized operator label for status and lifecycle logs. Do not include credentials or secrets."
+            },
+            "task_handle": {
+              "type": "string",
+              "pattern": "^task-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "description": "Required explicit logical-task handle returned by begin_task. Reuse the same handle for every exec/start_exec call in the same ChatGPT conversation or logical task. Never reuse a handle from another conversation/task."
             }
           },
           "required": [
-            "command"
+            "command",
+            "task_handle"
           ],
           "additionalProperties": false
         },
@@ -214,6 +298,13 @@
               ],
               "minimum": 1,
               "description": "Current 1-based queue position, or null when not queued."
+            },
+            "task_handle": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Logical task handle associated with this execution."
             }
           },
           "required": [
@@ -221,7 +312,8 @@
             "status",
             "label",
             "created_at",
-            "queue_position"
+            "queue_position",
+            "task_handle"
           ],
           "additionalProperties": false
         },
@@ -333,6 +425,13 @@
                       "async"
                     ],
                     "description": "Admission class used for concurrency accounting."
+                  },
+                  "task_handle": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution."
                   },
                   "label": {
                     "type": [
@@ -453,6 +552,7 @@
                   "status",
                   "state",
                   "execution_class",
+                  "task_handle",
                   "label",
                   "command_preview",
                   "command_sha256",
@@ -596,6 +696,13 @@
                       ],
                       "description": "Admission class used for concurrency accounting."
                     },
+                    "task_handle": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution."
+                    },
                     "label": {
                       "type": [
                         "string",
@@ -715,6 +822,7 @@
                     "status",
                     "state",
                     "execution_class",
+                    "task_handle",
                     "label",
                     "command_preview",
                     "command_sha256",
@@ -759,6 +867,13 @@
                         "async"
                       ],
                       "description": "Admission class used by this job."
+                    },
+                    "task_handle": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution."
                     },
                     "label": {
                       "type": [
@@ -884,6 +999,7 @@
                     "exec_id",
                     "status",
                     "execution_class",
+                    "task_handle",
                     "label",
                     "command_sha256",
                     "command_length",
@@ -1008,6 +1124,13 @@
                       ],
                       "description": "Admission class used for concurrency accounting."
                     },
+                    "task_handle": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution."
+                    },
                     "label": {
                       "type": [
                         "string",
@@ -1127,6 +1250,7 @@
                     "status",
                     "state",
                     "execution_class",
+                    "task_handle",
                     "label",
                     "command_preview",
                     "command_sha256",
@@ -1200,6 +1324,13 @@
                         "async"
                       ],
                       "description": "Admission class used by this job."
+                    },
+                    "task_handle": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution."
                     },
                     "label": {
                       "type": [
@@ -1325,6 +1456,7 @@
                     "exec_id",
                     "status",
                     "execution_class",
+                    "task_handle",
                     "label",
                     "command_sha256",
                     "command_length",

@@ -32,8 +32,9 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 
 | Tool | Purpose |
 |---|---|
-| `exec` | Run one bounded non-interactive command synchronously through the Job Manager. |
-| `start_exec` | Submit one bounded background command and immediately return a queryable `exec_id`. |
+| `begin_task` | Create one explicit logical task context and return a server-issued `task_handle` for conversation/task grouping. |
+| `exec` | Run one bounded non-interactive command synchronously through the Job Manager; MCP callers must provide a `task_handle`. |
+| `start_exec` | Submit one bounded background command with a `task_handle` and immediately return a queryable `exec_id`. |
 | `list_active_execs` | List queued and running remote executions plus sync/async/global admission capacity. |
 | `get_exec_status` | Read status plus incremental redacted stdout/stderr with independent cursors and bounded long-polling. |
 | `cancel_exec` | Idempotently cancel a queued or running execution; terminal states are immutable. |
@@ -41,6 +42,14 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 | `export_remote_file` | Transfer one verified remote file to ChatGPT as an embedded resource for host-side materialization into `/mnt/data`; oversized files are rejected. |
 
 The control-plane tools are operator-wide. They assume one trusted tenant and are intentionally available even when command capacity is full.
+
+### Explicit task context
+
+MCP protocol sessions are not treated as ChatGPT conversation identity. Before the first `exec` or `start_exec` in a new ChatGPT conversation or new logical task, call `begin_task` once. The server returns an opaque `task-...` handle; reuse that exact handle on every subsequent `exec` and `start_exec` in the same task. Different ChatGPT windows should create different handles.
+
+`exec` and `start_exec` require a server-issued handle at the MCP schema and runtime-validation layers. An unknown or invented handle is rejected with `unknown_task_handle`, which instructs the caller to run `begin_task`. `get_exec_status` and `cancel_exec` need only `exec_id`; task ownership is already stored with the execution. The handle is correlation metadata only and grants no authorization. Task contexts are bounded and process-local, matching the existing Runtime/Job Manager retention model.
+
+This follows the MCP explicit-handle pattern for carrying application state across otherwise stateless requests. It provides reliable Execution MCP grouping without pretending that the server knows ChatGPT's internal conversation ID.
 
 ### Choosing `exec` vs `start_exec`
 
@@ -74,7 +83,7 @@ docker run --rm \
   -e DEFAULT_CWD=/workspace \
   -v "$PWD/id_ed25519:/run/secrets/id_ed25519:ro" \
   -v "$PWD/known_hosts:/run/secrets/known_hosts:ro" \
-  ghcr.io/3011/exec-mcp:v0.6.2
+  ghcr.io/3011/exec-mcp:v0.7.0
 ```
 
 The example binds only to loopback. Add authentication and TLS at the surrounding transport layer before making the service reachable from another machine.
@@ -120,7 +129,7 @@ npm start
 
 The console focuses on current execution state rather than historical metrics: running/queued jobs, capacity, last runtime activity, last output time, retained stdout/stderr, origin metadata, and a bounded lifecycle trace. Activity and output are deliberately separate signals: a job can remain alive and observable while producing no output. Quiet periods are never labeled as hung or stuck without proof.
 
-Trace origin records only facts the server actually receives. An MCP transport session identifier may be shown, but it is explicitly not treated as a ChatGPT conversation identifier. The observation model reserves `task_handle` as `null` for a possible future opt-in design where a client explicitly supplies a stable task/conversation handle; v1 does not change MCP tool schemas to add that capability.
+Trace origin records only facts the server actually receives. An MCP transport session identifier may be shown, but it is explicitly not treated as a ChatGPT conversation identifier. MCP executions now carry a server-issued explicit `task_handle` created by `begin_task`; the Runtime Console groups executions by that handle and displays the optional task label. The handle is a logical correlation context, not proof of ChatGPT's internal conversation ID.
 
 Runtime state, traces, and retained output remain bounded and process-local, matching the existing Job Manager lifecycle. The console uses the same externally authenticated network boundary as the main service; there is no separate built-in Runtime Console authentication layer.
 

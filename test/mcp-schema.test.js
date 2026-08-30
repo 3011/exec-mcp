@@ -30,12 +30,14 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.ok(tool);
     assert.equal(body.result.tools.find((item) => item.name === 'download_file'), undefined);
     assert.equal(body.result.tools.find((item) => item.name === 'upload_file'), undefined);
+    const beginTask = body.result.tools.find((item) => item.name === 'begin_task');
     const startExec = body.result.tools.find((item) => item.name === 'start_exec');
     const listActive = body.result.tools.find((item) => item.name === 'list_active_execs');
     const getStatus = body.result.tools.find((item) => item.name === 'get_exec_status');
     const cancelExec = body.result.tools.find((item) => item.name === 'cancel_exec');
     const importArtifact = body.result.tools.find((item) => item.name === 'import_chatgpt_file');
     const exportArtifact = body.result.tools.find((item) => item.name === 'export_remote_file');
+    assert.ok(beginTask);
     assert.ok(startExec);
     assert.ok(listActive);
     assert.ok(getStatus);
@@ -51,7 +53,9 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.deepEqual(exportArtifact.outputSchema.properties.delivery_mode.enum, ['embedded_resource']);
     assert.equal(tool.annotations.openWorldHint, true);
     assert.equal(startExec.title, 'Start asynchronous remote job');
-    assert.deepEqual(startExec.outputSchema.required, ['exec_id', 'status', 'label', 'created_at', 'queue_position']);
+    assert.deepEqual(startExec.outputSchema.required, ['exec_id', 'status', 'label', 'created_at', 'queue_position', 'task_handle']);
+    assert.deepEqual(startExec.inputSchema.required, ['command', 'task_handle']);
+    assert.match(beginTask.description, /Different ChatGPT windows should create different task handles/);
     assert.match(startExec.description, /registered/);
     assert.match(startExec.description, /queued/);
     assert.match(startExec.description, /runtime is unknown/);
@@ -104,7 +108,8 @@ test('MCP exec tool schema includes operational context', async () => {
       'truncated',
       'timed_out',
       'stdout_tail',
-      'stderr_tail'
+      'stderr_tail',
+      'task_handle'
     ]);
     assert.equal(tool.title, 'Run short remote command synchronously');
     assert.match(tool.description, /roughly within 5 seconds/);
@@ -147,7 +152,15 @@ test('MCP exec call returns structured content matching output schema', async ()
   const base = `http://127.0.0.1:${server.address().port}`;
 
   try {
+    const missing = await mcpCall(base, -1, 'exec', { command: 'printf missing-handle', cwd: '/tmp' });
+    assert.equal(missing.result.isError, true);
+    assert.equal(missing.result.structuredContent.code, 'invalid_task_handle');
+    assert.match(missing.result.content[0].text, /begin_task/);
+
+    const begun = await mcpCall(base, 0, 'begin_task', { label: 'schema execution' });
+    const taskHandle = begun.result.structuredContent.task_handle;
     const result = await mcpCall(base, 1, 'exec', {
+      task_handle: taskHandle,
       command: 'printf hello',
       cwd: '/tmp',
       timeout_seconds: 5,
@@ -161,6 +174,7 @@ test('MCP exec call returns structured content matching output schema', async ()
     assert.equal(result.result.structuredContent.timed_out, false);
     assert.equal(result.result.structuredContent.truncated, false);
     assert.match(result.result.structuredContent.stdout_tail, /hello/);
+    assert.equal(result.result.structuredContent.task_handle, taskHandle);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

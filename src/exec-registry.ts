@@ -67,12 +67,14 @@ export interface ExecutionMetadata {
   commandLength?: number;
   cwd?: string | null;
   executionClass?: ExecutionClass;
+  taskHandle?: string | null;
 }
 
 export interface ExecutionRecord {
   id: string;
   state: ExecutionState;
   executionClass: ExecutionClass;
+  taskHandle: string | null;
   abortReason: AbortReason | null;
   abortSource: string | null;
   createdAt: number;
@@ -102,6 +104,7 @@ export interface ExecutionHistoryRecord {
   exec_id: string;
   status: PublicJobStatus;
   execution_class: ExecutionClass;
+  task_handle: string | null;
   label: string | null;
   command_sha256: string | null;
   command_length: number;
@@ -128,6 +131,7 @@ export interface PublicActiveExecution {
   status: 'queued' | 'running';
   state: ExecutionState;
   execution_class: ExecutionClass;
+  task_handle: string | null;
   label: string | null;
   command_preview: string | null;
   command_sha256: string | null;
@@ -221,6 +225,7 @@ export class ExecRegistry {
       id,
       state: initialState,
       executionClass: metadata.executionClass ?? 'sync',
+      taskHandle: metadata.taskHandle ?? null,
       abortReason: null,
       abortSource: null,
       createdAt: now,
@@ -463,6 +468,7 @@ function publicActive(rec: ExecutionRecord, now: number): PublicActiveExecution 
     status: publicStatusForState(rec.state),
     state: rec.state,
     execution_class: rec.executionClass,
+    task_handle: rec.taskHandle,
     label: rec.label,
     command_preview: rec.commandPreview,
     command_sha256: rec.commandSha256,
@@ -490,6 +496,7 @@ function historyRecord(rec: ExecutionRecord, finalState: FinalExecutionState, re
     exec_id: rec.id,
     status: publicStatusForFinalState(finalState),
     execution_class: rec.executionClass,
+    task_handle: rec.taskHandle,
     label: rec.label,
     command_sha256: rec.commandSha256,
     command_length: rec.commandLength,

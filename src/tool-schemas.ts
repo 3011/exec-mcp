@@ -37,7 +37,40 @@ function executionInputProperties() {
     timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime after the job starts running. Values above MAX_TIMEOUT_SECONDS are rejected. On expiry, the server sends SIGTERM and then SIGKILL after KILL_GRACE_SECONDS.' },
     max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded by synchronous exec and retained in its final tail. Output beyond this limit is drained but omitted; Job status output uses its own bounded query limit.' },
     env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables. Invalid names are ignored, ENV plus BASH_ENV are removed, and env values are never exposed through job metadata, history, list, or lifecycle logs.' },
-    label: { type: 'string', maxLength: 120, description: 'Optional sanitized operator label for status and lifecycle logs. Do not include credentials or secrets.' }
+    label: { type: 'string', maxLength: 120, description: 'Optional sanitized operator label for status and lifecycle logs. Do not include credentials or secrets.' },
+    task_handle: { type: 'string', pattern: '^task-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$', description: 'Required explicit logical-task handle returned by begin_task. Reuse the same handle for every exec/start_exec call in the same ChatGPT conversation or logical task. Never reuse a handle from another conversation/task.' }
+  };
+}
+
+function beginTaskToolSchema() {
+  return {
+    name: 'begin_task',
+    title: 'Begin logical task context',
+    description: 'Call this once before the first exec or start_exec in a new ChatGPT conversation or new logical task. The server returns an opaque task_handle. Reuse that exact task_handle on every subsequent exec and start_exec call that belongs to the same conversation/task. Different ChatGPT windows should create different task handles. This handle is for correlation and Runtime Console grouping; it is not authentication or authorization.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        label: { type: 'string', maxLength: 120, description: 'Optional concise human-readable task label for the Runtime Console. Prefer a short description of the current user goal and do not include secrets.' }
+      },
+      additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        task_handle: { type: 'string', pattern: '^task-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$', description: 'Server-issued opaque task handle to pass to exec/start_exec.' },
+        label: { type: ['string', 'null'], description: 'Sanitized task label.' },
+        created_at: { type: 'string', description: 'UTC timestamp when the task context was created.' },
+        last_attached_at: { type: 'string', description: 'UTC timestamp of the most recent execution association; initially equal to created_at.' },
+        execution_count: { type: 'integer', minimum: 0, description: 'Executions currently associated with this task context.' }
+      },
+      required: ['task_handle', 'label', 'created_at', 'last_attached_at', 'execution_count'],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    _meta: {
+      'openai/toolInvocation/invoking': 'Creating task context',
+      'openai/toolInvocation/invoked': 'Task context ready'
+    }
   };
 }
 
@@ -45,8 +78,8 @@ function execToolSchema() {
   return {
     name: 'exec',
     title: 'Run short remote command synchronously',
-    description: 'Run one bounded, non-interactive shell command synchronously and wait for its terminal result. Agent selection guidance: prefer exec only when the command is expected to finish quickly (roughly within 5 seconds) AND the next reasoning or action depends on its result. Typical exec cases are pwd, ls, cat/sed/grep, git status/diff, kubectl get, and other small deterministic probes or edits. For builds, test suites, package installs, image builds, scans, sleeps/waits, commands with uncertain duration, or work that can run in parallel, prefer start_exec so useful agent work can continue while the job runs. Never emulate background execution inside exec with nohup, disown, or a trailing/background ampersand; submit the foreground command through start_exec so Job Manager status, cancellation, timeout, and remote process-group cleanup remain authoritative. Do not use exec merely to wait for an asynchronous job; use get_exec_status at the synchronization point. Internally exec submits a sync job through the same Job Manager and runner used by start_exec, waits for a terminal state, then returns the final summary. Commands are evaluated by /bin/sh -c. The server validates cwd against ALLOWED_CWDS, enforces runtime and output limits, filters environment variables, enforces dedicated sync/global concurrency limits, and terminates the managed remote process group on timeout or cancellation.',
-    inputSchema: { type: 'object', properties: executionInputProperties(), required: ['command'], additionalProperties: false },
+    description: 'Run one bounded, non-interactive shell command synchronously and wait for its terminal result. Task-context rule: before the first execution in a new ChatGPT conversation/logical task, call begin_task once; then reuse its exact task_handle on every exec/start_exec in that same task. Agent selection guidance: prefer exec only when the command is expected to finish quickly (roughly within 5 seconds) AND the next reasoning or action depends on its result. Typical exec cases are pwd, ls, cat/sed/grep, git status/diff, kubectl get, and other small deterministic probes or edits. For builds, test suites, package installs, image builds, scans, sleeps/waits, commands with uncertain duration, or work that can run in parallel, prefer start_exec so useful agent work can continue while the job runs. Never emulate background execution inside exec with nohup, disown, or a trailing/background ampersand; submit the foreground command through start_exec so Job Manager status, cancellation, timeout, and remote process-group cleanup remain authoritative. Do not use exec merely to wait for an asynchronous job; use get_exec_status at the synchronization point. Internally exec submits a sync job through the same Job Manager and runner used by start_exec, waits for a terminal state, then returns the final summary. Commands are evaluated by /bin/sh -c. The server validates cwd against ALLOWED_CWDS, enforces runtime and output limits, filters environment variables, enforces dedicated sync/global concurrency limits, and terminates the managed remote process group on timeout or cancellation.',
+    inputSchema: { type: 'object', properties: executionInputProperties(), required: ['command', 'task_handle'], additionalProperties: false },
     outputSchema: {
       type: 'object',
       properties: {
@@ -60,9 +93,10 @@ function execToolSchema() {
         truncated: { type: 'boolean', description: 'True when output exceeded max_output_bytes for the synchronous response.' },
         timed_out: { type: 'boolean', description: 'True when timeout_seconds was exceeded after execution started.' },
         stdout_tail: { type: 'string', description: 'Bounded, redacted stdout tail.' },
-        stderr_tail: { type: 'string', description: 'Bounded, redacted stderr tail.' }
+        stderr_tail: { type: 'string', description: 'Bounded, redacted stderr tail.' },
+        task_handle: { type: ['string', 'null'], description: 'Logical task handle associated with this execution. MCP exec calls require a non-null server-issued handle.' }
       },
-      required: ['exec_id', 'type', 'code', 'signal', 'duration_ms', 'stdout_bytes', 'stderr_bytes', 'truncated', 'timed_out', 'stdout_tail', 'stderr_tail'],
+      required: ['exec_id', 'type', 'code', 'signal', 'duration_ms', 'stdout_bytes', 'stderr_bytes', 'truncated', 'timed_out', 'stdout_tail', 'stderr_tail', 'task_handle'],
       additionalProperties: false
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -77,8 +111,8 @@ function startExecToolSchema() {
   return {
     name: 'start_exec',
     title: 'Start asynchronous remote job',
-    description: 'Submit one bounded remote command as an asynchronous Job Manager job and return as soon as the job is registered. Agent selection guidance: prefer start_exec whenever runtime is unknown, may exceed a few seconds, or the command can run in parallel with other useful work. Typical start_exec cases are builds, test suites, package installs, container/image builds, scans, migrations, long scripts, sleeps/waits, and multiple independent jobs. Pass the real foreground command to start_exec; do not add nohup, disown, or shell backgrounding, because Job Manager itself owns the background lifecycle. When starting several independent jobs, use concise labels so their results are easy to reconcile. Do not use start_exec for trivial probes whose result is required immediately; exec is simpler for those. After start_exec returns, keep the exec_id and continue independent reasoning or tool work instead of immediately high-frequency polling. At a synchronization point, call get_exec_status with the returned cursors and optionally wait_seconds up to 30 seconds; use cancel_exec if the job is no longer needed. Returning exec_id means the job is registered and immediately queryable; it does not mean the command succeeded or has started running. Jobs may be queued before entering the async execution pool. Finalized records remain queryable only while bounded Job Manager/history retention keeps them, and in-memory state is lost on service restart.',
-    inputSchema: { type: 'object', properties: executionInputProperties(), required: ['command'], additionalProperties: false },
+    description: 'Submit one bounded remote command as an asynchronous Job Manager job and return as soon as the job is registered. Task-context rule: before the first execution in a new ChatGPT conversation/logical task, call begin_task once; then reuse its exact task_handle on every exec/start_exec in that same task. Agent selection guidance: prefer start_exec whenever runtime is unknown, may exceed a few seconds, or the command can run in parallel with other useful work. Typical start_exec cases are builds, test suites, package installs, container/image builds, scans, migrations, long scripts, sleeps/waits, and multiple independent jobs. Pass the real foreground command to start_exec; do not add nohup, disown, or shell backgrounding, because Job Manager itself owns the background lifecycle. When starting several independent jobs, use concise labels so their results are easy to reconcile. Do not use start_exec for trivial probes whose result is required immediately; exec is simpler for those. After start_exec returns, keep the exec_id and continue independent reasoning or tool work instead of immediately high-frequency polling. At a synchronization point, call get_exec_status with the returned cursors and optionally wait_seconds up to 30 seconds; use cancel_exec if the job is no longer needed. Returning exec_id means the job is registered and immediately queryable; it does not mean the command succeeded or has started running. Jobs may be queued before entering the async execution pool. Finalized records remain queryable only while bounded Job Manager/history retention keeps them, and in-memory state is lost on service restart.',
+    inputSchema: { type: 'object', properties: executionInputProperties(), required: ['command', 'task_handle'], additionalProperties: false },
     outputSchema: {
       type: 'object',
       properties: {
@@ -86,9 +120,10 @@ function startExecToolSchema() {
         status: { type: 'string', enum: publicJobStatusValues, description: 'Observed job status at response time.' },
         label: { type: ['string', 'null'], description: 'Optional sanitized operator label.' },
         created_at: { type: 'string', description: 'UTC timestamp when the Job Manager registered the job.' },
-        queue_position: { type: ['integer', 'null'], minimum: 1, description: 'Current 1-based queue position, or null when not queued.' }
+        queue_position: { type: ['integer', 'null'], minimum: 1, description: 'Current 1-based queue position, or null when not queued.' },
+        task_handle: { type: ['string', 'null'], description: 'Logical task handle associated with this execution.' }
       },
-      required: ['exec_id', 'status', 'label', 'created_at', 'queue_position'],
+      required: ['exec_id', 'status', 'label', 'created_at', 'queue_position', 'task_handle'],
       additionalProperties: false
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -107,6 +142,7 @@ function activeExecutionSchema() {
       status: { type: 'string', enum: ['queued', 'running'], description: 'Stable public job status.' },
       state: { type: 'string', enum: executionStateValues, description: 'Detailed current execution lifecycle state.' },
       execution_class: { type: 'string', enum: executionClassValues, description: 'Admission class used for concurrency accounting.' },
+      task_handle: { type: ['string', 'null'], description: 'Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution.' },
       label: { type: ['string', 'null'], description: 'Optional sanitized operator label.' },
       command_preview: { type: ['string', 'null'], description: 'Optional redacted command preview when explicitly enabled; otherwise null.' },
       command_sha256: { type: ['string', 'null'], description: 'SHA-256 fingerprint of the submitted command, or null when unavailable.' },
@@ -125,7 +161,7 @@ function activeExecutionSchema() {
       remote_exit_confirmed: { type: ['boolean', 'null'], description: 'Whether remote process exit has been confirmed, or null when unknown.' },
       queue_position: { type: ['integer', 'null'], minimum: 1, description: 'Current 1-based queue position, or null when not queued.' }
     },
-    required: ['exec_id', 'status', 'state', 'execution_class', 'label', 'command_preview', 'command_sha256', 'command_length', 'cwd', 'timeout_seconds', 'elapsed_seconds', 'created_at', 'transport_started_at', 'running_at', 'transport_pid', 'remote_pid', 'remote_pgid', 'abort_reason', 'transport_exit_confirmed', 'remote_exit_confirmed', 'queue_position'],
+    required: ['exec_id', 'status', 'state', 'execution_class', 'task_handle', 'label', 'command_preview', 'command_sha256', 'command_length', 'cwd', 'timeout_seconds', 'elapsed_seconds', 'created_at', 'transport_started_at', 'running_at', 'transport_pid', 'remote_pid', 'remote_pgid', 'abort_reason', 'transport_exit_confirmed', 'remote_exit_confirmed', 'queue_position'],
     additionalProperties: false
   };
 }
@@ -137,6 +173,7 @@ function executionHistorySchema() {
       exec_id: { type: 'string', description: 'Unique execution identifier.' },
       status: { type: 'string', enum: ['completed', 'failed', 'cancelled', 'timed_out'], description: 'Stable terminal job status.' },
       execution_class: { type: 'string', enum: executionClassValues, description: 'Admission class used by this job.' },
+      task_handle: { type: ['string', 'null'], description: 'Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution.' },
       label: { type: ['string', 'null'], description: 'Optional sanitized operator label.' },
       command_sha256: { type: ['string', 'null'], description: 'SHA-256 fingerprint of the submitted command, or null.' },
       command_length: { type: 'integer', minimum: 0, description: 'Submitted command length in UTF-8 bytes.' },
@@ -157,7 +194,7 @@ function executionHistorySchema() {
       diagnostic: { type: 'string', description: 'Optional retained lifecycle diagnostic.' },
       late_exit_observed_at: { type: 'string', description: 'Optional UTC timestamp for a transport exit observed after forced finalization.' }
     },
-    required: ['exec_id', 'status', 'execution_class', 'label', 'command_sha256', 'command_length', 'final_state', 'abort_reason', 'abort_source', 'created_at', 'started_at', 'running_at', 'finished_at', 'duration_ms', 'exit_code', 'signal', 'timed_out', 'transport_exit_confirmed', 'remote_exit_confirmed'],
+    required: ['exec_id', 'status', 'execution_class', 'task_handle', 'label', 'command_sha256', 'command_length', 'final_state', 'abort_reason', 'abort_source', 'created_at', 'started_at', 'running_at', 'finished_at', 'duration_ms', 'exit_code', 'signal', 'timed_out', 'transport_exit_confirmed', 'remote_exit_confirmed'],
     additionalProperties: false
   };
 }
@@ -375,6 +412,7 @@ function exportRemoteFileToolSchema() {
 }
 
 export const TOOL_SCHEMAS = [
+  beginTaskToolSchema(),
   execToolSchema(),
   startExecToolSchema(),
   listActiveExecsToolSchema(),

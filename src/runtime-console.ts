@@ -122,7 +122,7 @@ const RUNTIME_HTML = `<!doctype html>
         <div>
           <div class="eyebrow">LIVE OBSERVABILITY</div>
           <h1 id="runtime-title">What is running right now?</h1>
-          <p>Read-only visibility into executions, retained output and lifecycle traces.</p>
+          <p>Read-only visibility into task contexts, executions, retained output and lifecycle traces.</p>
         </div>
         <div class="hero-meta">
           <span id="health-pill" class="health-pill neutral"><span class="status-dot"></span><span>Loading</span></span>
@@ -150,7 +150,7 @@ const RUNTIME_HTML = `<!doctype html>
         <div class="execution-pane panel">
           <div class="panel-header execution-header">
             <div>
-              <h2>Executions</h2>
+              <h2>Tasks & executions</h2>
               <span id="execution-count" class="muted">—</span>
             </div>
             <button id="refresh-button" class="quiet-button" type="button">Refresh</button>
@@ -166,7 +166,7 @@ const RUNTIME_HTML = `<!doctype html>
             </div>
             <label class="search-wrap">
               <span class="search-icon" aria-hidden="true"></span>
-              <input id="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search label, cwd, id…">
+              <input id="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search task, label, cwd, id…">
               <kbd>/</kbd>
             </label>
           </div>
@@ -277,6 +277,7 @@ h1 { font-size:32px; line-height:1.08; letter-spacing:-.035em; margin:0 0 10px; 
 .search-wrap { height:34px; display:flex; align-items:center; gap:8px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-2); padding:0 9px; color:var(--text-3); }
 .search-icon { width:12px; height:12px; border:1px solid currentColor; border-radius:50%; position:relative; flex:0 0 auto; opacity:.75; }.search-icon:after { content:""; position:absolute; width:5px; height:1px; background:currentColor; right:-4px; bottom:-2px; transform:rotate(45deg); transform-origin:left center; }.search-wrap input { flex:1; min-width:0; border:0; outline:0; color:var(--text); background:transparent; font-size:12px; }.search-wrap input::placeholder{color:var(--text-3)} kbd { border:1px solid var(--line); background:var(--surface); border-radius:4px; padding:0 5px; font:10px/18px var(--mono); color:var(--text-3); }
 .execution-list { height:calc(100% - 147px); overflow:auto; overscroll-behavior:contain; }
+.task-group { border-bottom:1px solid var(--line); }.task-group:last-child{border-bottom:0}.task-group-header { position:sticky; top:0; z-index:2; min-height:43px; padding:9px 14px 8px; background:color-mix(in srgb,var(--surface) 94%,transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between; gap:12px; }.task-group-title{min-width:0}.task-group-title strong{display:block;font-size:11px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-group-title span{display:block;color:var(--text-3);font:9px/1.4 var(--mono);margin-top:2px}.task-group-meta{color:var(--text-3);font:9px/1 var(--mono);white-space:nowrap}.task-group.active .task-group-header{box-shadow:inset 2px 0 var(--green)}.task-group.queued .task-group-header{box-shadow:inset 2px 0 var(--amber)}.task-group.issues .task-group-header{box-shadow:inset 2px 0 var(--red)}
 .execution-item { width:100%; display:block; text-align:left; border:0; border-bottom:1px solid var(--line-soft); background:transparent; padding:14px 15px 13px; cursor:pointer; transition:background 100ms ease; }
 .execution-item:hover { background:var(--surface-2); }.execution-item.selected { background:var(--blue-soft); box-shadow:inset 2px 0 var(--blue); }
 .execution-title-row { justify-content:space-between; gap:12px; }.execution-name { font-size:13px; font-weight:610; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.execution-time { color:var(--text-3); font:11px/1 var(--mono); flex:0 0 auto; }
@@ -455,7 +456,8 @@ const RUNTIME_JS = `
 
   function matchesSearch(item) {
     if (!state.search) return true;
-    const haystack = [item.label, item.cwd, item.command_preview, item.exec_id, item.trace_id, item.command_sha256]
+    const taskContext = item.task_context || {};
+    const haystack = [taskContext.label, taskContext.task_handle, item.task_handle, item.label, item.cwd, item.command_preview, item.exec_id, item.trace_id, item.command_sha256]
       .filter(Boolean).join(' ').toLowerCase();
     return haystack.includes(state.search.toLowerCase());
   }
@@ -479,31 +481,67 @@ const RUNTIME_JS = `
     els.version.textContent = 'Execution MCP v' + overview.version;
   }
 
+  function taskGroupStatus(items) {
+    if (items.some((item) => issueItem(item))) return 'issues';
+    if (items.some((item) => statusOf(item) === 'running')) return 'active';
+    if (items.some((item) => statusOf(item) === 'queued')) return 'queued';
+    return '';
+  }
+
+  function taskGroupLabel(item) {
+    const context = item.task_context || {};
+    return context.label || (item.task_handle ? 'Task ' + shortId(item.task_handle.replace(/^task-/, ''), 12) : 'Ungrouped / legacy');
+  }
+
   function renderExecutionList() {
     const items = state.executions.filter(matchesFilter).filter(matchesSearch);
-    els.executionCount.textContent = items.length + (items.length === 1 ? ' item' : ' items');
+    const groups = new Map();
+    for (const item of items) {
+      const key = item.task_handle || '__ungrouped__';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    els.executionCount.textContent = groups.size + (groups.size === 1 ? ' task' : ' tasks') + ' · ' + items.length + (items.length === 1 ? ' execution' : ' executions');
     els.list.replaceChildren();
     els.listEmpty.classList.toggle('hidden', items.length !== 0);
 
     const fragment = document.createDocumentFragment();
-    for (const item of items) {
-      const status = statusOf(item);
-      const button = make('button', 'execution-item' + (state.selectedId === item.exec_id ? ' selected' : ''));
-      button.type = 'button';
-      button.dataset.execId = item.exec_id;
+    for (const [taskHandle, taskItems] of groups) {
+      const group = make('section', 'task-group ' + taskGroupStatus(taskItems));
+      const header = make('div', 'task-group-header');
+      const title = make('div', 'task-group-title');
+      const first = taskItems[0] || {};
+      const context = first.task_context || {};
+      append(title,
+        make('strong', '', taskGroupLabel(first)),
+        make('span', '', taskHandle === '__ungrouped__' ? 'No explicit task context' : shortId(taskHandle, 44))
+      );
+      const activeCount = taskItems.filter((item) => statusOf(item) === 'running').length;
+      const queuedCount = taskItems.filter((item) => statusOf(item) === 'queued').length;
+      const suffix = activeCount ? activeCount + ' running' : queuedCount ? queuedCount + ' queued' : taskItems.length + (taskItems.length === 1 ? ' execution' : ' executions');
+      append(header, title, make('span', 'task-group-meta', suffix));
+      group.appendChild(header);
 
-      const titleRow = make('div', 'execution-title-row');
-      append(titleRow, make('span', 'execution-name', displayName(item)), make('span', 'execution-time', durationFor(item)));
-      const path = make('div', 'execution-path', item.cwd || 'cwd unavailable');
+      for (const item of taskItems) {
+        const status = statusOf(item);
+        const button = make('button', 'execution-item' + (state.selectedId === item.exec_id ? ' selected' : ''));
+        button.type = 'button';
+        button.dataset.execId = item.exec_id;
 
-      const meta = make('div', 'execution-meta');
-      const badge = make('span', 'state-badge ' + statusClass(status));
-      append(badge, make('span', 'status-dot'), make('span', '', statusLabel(status)));
-      const activity = activityFor(item);
-      append(meta, badge, make('span', 'activity-badge ' + activity.className, activity.label), make('span', 'execution-id-short', shortId(item.exec_id.replace(/^exec-/, ''), 8)));
-      append(button, titleRow, path, meta);
-      button.addEventListener('click', () => selectExecution(item.exec_id));
-      fragment.appendChild(button);
+        const titleRow = make('div', 'execution-title-row');
+        append(titleRow, make('span', 'execution-name', displayName(item)), make('span', 'execution-time', durationFor(item)));
+        const path = make('div', 'execution-path', item.cwd || 'cwd unavailable');
+
+        const meta = make('div', 'execution-meta');
+        const badge = make('span', 'state-badge ' + statusClass(status));
+        append(badge, make('span', 'status-dot'), make('span', '', statusLabel(status)));
+        const activity = activityFor(item);
+        append(meta, badge, make('span', 'activity-badge ' + activity.className, activity.label), make('span', 'execution-id-short', shortId(item.exec_id.replace(/^exec-/, ''), 8)));
+        append(button, titleRow, path, meta);
+        button.addEventListener('click', () => selectExecution(item.exec_id));
+        group.appendChild(button);
+      }
+      fragment.appendChild(group);
     }
     els.list.appendChild(fragment);
   }
@@ -647,11 +685,14 @@ const RUNTIME_JS = `
     const identityTitle = make('div', 'section-title'); append(identityTitle, make('h3', '', 'Identity & origin'), make('span', '', 'observable facts only'));
     const stack = make('div', 'meta-stack');
     const origin = observation.origin || task.origin || null;
+    const taskContext = detail.task_context || {};
     append(stack,
       copyableMetaLine('Execution', task.exec_id || observation.exec_id),
       copyableMetaLine('Trace', observation.trace_id || task.trace_id),
       metaLine('Origin', origin ? ((origin.kind === 'mcp' ? 'MCP' : origin.kind) + (origin.tool ? ' · ' + origin.tool : '')) : 'Unavailable'),
-      metaLine('Chat link', origin && origin.task_handle ? origin.task_handle : 'Not provided · conversation cannot be identified'),
+      metaLine('Task', taskContext.label || (task.task_handle ? 'Explicit task context' : 'Ungrouped / legacy')),
+      copyableMetaLine('Task handle', task.task_handle || (origin && origin.task_handle) || ''),
+      metaLine('Conversation', task.task_handle ? 'Explicit model-carried context · internal ChatGPT conversation ID is not exposed' : 'Cannot be identified reliably'),
       metaLine('MCP session', origin && origin.transport_session_id ? shortId(origin.transport_session_id, 42) + ' · transport only, not conversation' : 'Unavailable'),
       metaLine('Request', origin && origin.request_id ? origin.request_id : 'Unavailable')
     );

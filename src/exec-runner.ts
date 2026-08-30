@@ -11,6 +11,8 @@ import { ExecRegistry, ExecutionCircuitOpenError } from './exec-registry.js';
 import type { AbortReason, ExecutionClass, ExecutionHistoryRecord, ExecutionRecord, ExecutionState, FinalExecutionState } from './exec-registry.js';
 import { RuntimeObserver, runtimeStateLevel } from './runtime-observer.js';
 import type { RuntimeOrigin } from './runtime-observer.js';
+import { TaskContextStore, TASK_HANDLE_PATTERN } from './task-context.js';
+import type { TaskContext } from './task-context.js';
 
 type UnknownRecord = Record<string, unknown>;
 type EventPayload = { type: string; [key: string]: unknown };
@@ -44,6 +46,7 @@ export interface ExecSummary {
   timed_out: boolean;
   stdout_tail: string;
   stderr_tail: string;
+  task_handle: string | null;
 }
 
 export interface RunOptions {
@@ -54,6 +57,7 @@ export interface RunOptions {
   traceId?: string;
   origin?: Partial<RuntimeOrigin>;
   requestReceivedAt?: number;
+  taskContext?: TaskContext;
 }
 
 export interface GetStatusOptions {
@@ -123,6 +127,7 @@ export class ExecRunner {
   readonly registry: ExecRegistry;
   readonly metrics: ExecMetrics;
   readonly runtimeObserver: RuntimeObserver;
+  readonly taskContexts: TaskContextStore;
   private readonly jobs = new Map<string, ManagedJob>();
   private readonly queue: string[] = [];
   private scheduling = false;
@@ -137,6 +142,7 @@ export class ExecRunner {
       emergencyReapMs: config.emergencyReapSeconds * 1000
     });
     this.runtimeObserver = new RuntimeObserver({ maxExecutions: Math.max(100, config.recentHistoryLimit * 2) });
+    this.taskContexts = new TaskContextStore(Math.max(200, config.recentHistoryLimit * 4));
     this.registry.onEmergencyReap = (record) => {
       if (record?.exec_id) this.runtimeObserver.event(record.exec_id, 'unconfirmed_reaped', { level: 'error', detail: 'transport exit was not confirmed' });
       this.logLifecycle('unconfirmed_reaped', record?.exec_id, {
@@ -164,6 +170,23 @@ export class ExecRunner {
     };
     this.jobGc = setInterval(() => this.pruneJobs(), Math.min(60000, Math.max(5000, config.jobRetentionSeconds * 500)));
     this.jobGc.unref?.();
+  }
+
+
+  beginTask(input: unknown): TaskContext {
+    const req: UnknownRecord = isRecord(input) ? input : {};
+    return this.taskContexts.create(sanitizeLabel(req.label));
+  }
+
+  requireTaskContext(value: unknown): TaskContext {
+    if (typeof value !== 'string' || !TASK_HANDLE_PATTERN.test(value)) {
+      throw new ExecRejectedError('invalid_task_handle', 'task_handle must be a server-issued task handle from begin_task');
+    }
+    const context = this.taskContexts.get(value);
+    if (!context) {
+      throw new ExecRejectedError('unknown_task_handle', 'unknown_task_handle: call begin_task in this conversation and use the returned task_handle');
+    }
+    return context;
   }
 
   get active(): number { return this.registry.slotCount; }
@@ -269,7 +292,8 @@ export class ExecRunner {
           commandSha256: spec.commandSha256,
           commandLength: spec.commandLength,
           cwd: spec.cwd,
-          executionClass
+          executionClass,
+          taskHandle: options.taskContext?.task_handle ?? null
         }
       });
     } catch (err) {
@@ -292,8 +316,12 @@ export class ExecRunner {
       timeoutSeconds: spec.timeoutSeconds,
       validatedAt
     };
+    if (options.taskContext) {
+      runtimeRegistration.origin = { ...(options.origin || {}), task_handle: options.taskContext.task_handle };
+      this.taskContexts.attach(options.taskContext.task_handle, rec.id, rec.createdAt);
+    }
     if (options.traceId !== undefined) runtimeRegistration.traceId = options.traceId;
-    if (options.origin !== undefined) runtimeRegistration.origin = options.origin;
+    if (options.origin !== undefined && !options.taskContext) runtimeRegistration.origin = options.origin;
     if (options.requestReceivedAt !== undefined) runtimeRegistration.requestReceivedAt = options.requestReceivedAt;
     this.runtimeObserver.registerExecution(runtimeRegistration);
 
@@ -562,7 +590,8 @@ export class ExecRunner {
             truncated,
             timed_out: timedOut,
             stdout_tail: tails.stdout_tail,
-            stderr_tail: tails.stderr_tail
+            stderr_tail: tails.stderr_tail,
+            task_handle: rec.taskHandle
           };
           send(summary);
           resolveRun({ exec_id: execId, ...summary });
@@ -619,7 +648,8 @@ export class ExecRunner {
       status: task?.status ?? 'failed',
       label: job.record.label,
       created_at: new Date(job.record.createdAt).toISOString(),
-      queue_position: this.queuePosition(job.record.id)
+      queue_position: this.queuePosition(job.record.id),
+      task_handle: job.record.taskHandle
     };
   }
 
@@ -698,6 +728,7 @@ export class ExecRunner {
         queued: active.queued,
         queue_max: active.max_queue
       },
+      task_contexts: { total: this.taskContexts.list().length },
       totals: {
         requests: this.metrics.requestsTotal,
         started: this.metrics.startedTotal,
@@ -716,7 +747,8 @@ export class ExecRunner {
       finished_at: null,
       duration_ms: null,
       final_state: null,
-      ...this.runtimeObserver.fields(task.exec_id)
+      ...this.runtimeObserver.fields(task.exec_id),
+      task_context: this.taskContexts.get(task.task_handle)
     }));
     const seen = new Set(active.map((task) => task.exec_id));
     const finished: Array<Record<string, unknown> & { exec_id: string; created_at: string }> = [];
@@ -734,7 +766,8 @@ export class ExecRunner {
         state: task.final_state,
         cwd: observation?.cwd ?? null,
         command_preview: observation?.command_preview ?? null,
-        ...this.runtimeObserver.fields(task.exec_id)
+        ...this.runtimeObserver.fields(task.exec_id),
+        task_context: this.taskContexts.get(task.task_handle)
       });
     }
     return [...active, ...finished]
@@ -753,6 +786,7 @@ export class ExecRunner {
       found: true as const,
       source: state.source,
       task,
+      task_context: this.taskContexts.get(task.task_handle),
       observation: this.runtimeObserver.get(execId),
       logs: job ? {
         available: true,
@@ -855,7 +889,8 @@ export class ExecRunner {
       truncated: false,
       timed_out: timedOut,
       stdout_tail: '',
-      stderr_tail: ''
+      stderr_tail: '',
+      task_handle: job.record.taskHandle
     };
     job.emit({ ...summary });
     const finalizeInput = { exitCode: null, signal: null, transportExitConfirmed: true } as { exitCode: null; signal: null; transportExitConfirmed: true; failureReason?: string };

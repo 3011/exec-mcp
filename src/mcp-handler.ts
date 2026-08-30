@@ -138,6 +138,10 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
     const name = params.name;
     const args: UnknownRecord = isRecord(params.arguments) ? params.arguments : {};
     try {
+      if (name === 'begin_task') {
+        const result = runner.beginTask(args);
+        return toolResult(id, JSON.stringify(result, null, 2), false, result);
+      }
       if (name === 'exec') {
         if (context.isBatch) return toolResult(id, 'exec_not_supported_in_batch: Send exec as a standalone JSON-RPC request.', true);
         const events: ExecEvent[] = [];
@@ -146,7 +150,9 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
         context.signal?.addEventListener('abort', abortFromHttp, { once: true });
         if (context.signal?.aborted) abortFromHttp();
         try {
+          const taskContext = runner.requireTaskContext(args.task_handle);
           const summary = await runner.run(args, (event) => events.push(event), {
+            taskContext,
             abortSignal: requestRecord.abortController.signal,
             abortReason: requestRecord.cancelSource === 'mcp_notification' ? 'mcp_notification_cancel' : 'http_disconnect',
             abortSource: requestRecord.cancelSource || 'http',
@@ -170,7 +176,9 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
       }
       if (name === 'start_exec') {
         if (context.isBatch) return toolResult(id, 'start_exec_not_supported_in_batch: Send start_exec as a standalone JSON-RPC request.', true);
+        const taskContext = runner.requireTaskContext(args.task_handle);
         const result = runner.start(args, {
+          taskContext,
           traceId: runner.runtimeObserver.newTraceId(),
           requestReceivedAt,
           origin: {
@@ -273,7 +281,8 @@ function execStructuredContent(summary: ExecSummary): ExecSummary {
     truncated: summary.truncated,
     timed_out: summary.timed_out,
     stdout_tail: summary.stdout_tail,
-    stderr_tail: summary.stderr_tail
+    stderr_tail: summary.stderr_tail,
+    task_handle: summary.task_handle
   };
 }
 
