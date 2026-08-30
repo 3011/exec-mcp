@@ -112,24 +112,14 @@ const RUNTIME_HTML = `<!doctype html>
         </div>
       </div>
       <div class="top-actions">
+        <span id="updated-at" class="muted top-updated">—</span>
+        <span id="health-pill" class="health-pill neutral"><span class="status-dot"></span><span>Loading</span></span>
         <div id="connection-status" class="connection"><span class="status-dot"></span><span>Connecting</span></div>
         <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme">◐</button>
       </div>
     </header>
 
     <main>
-      <section class="hero" aria-labelledby="runtime-title">
-        <div>
-          <div class="eyebrow">LIVE OBSERVABILITY</div>
-          <h1 id="runtime-title">What is running right now?</h1>
-          <p>Read-only visibility into task contexts, executions, retained output and lifecycle traces.</p>
-        </div>
-        <div class="hero-meta">
-          <span id="health-pill" class="health-pill neutral"><span class="status-dot"></span><span>Loading</span></span>
-          <span id="updated-at" class="muted">—</span>
-        </div>
-      </section>
-
       <section id="summary" class="summary-grid" aria-label="Runtime summary">
         <article class="summary-card"><span>Running</span><strong id="count-running">—</strong><small id="cap-running">—</small></article>
         <article class="summary-card"><span>Queued</span><strong id="count-queued">—</strong><small id="cap-queued">—</small></article>
@@ -150,7 +140,7 @@ const RUNTIME_HTML = `<!doctype html>
         <div class="execution-pane panel">
           <div class="panel-header execution-header">
             <div>
-              <h2>Tasks & executions</h2>
+              <h2>Tasks</h2>
               <span id="execution-count" class="muted">—</span>
             </div>
             <button id="refresh-button" class="quiet-button" type="button">Refresh</button>
@@ -236,7 +226,7 @@ button, input { font: inherit; }
 button { color: inherit; }
 .app-shell { width: min(1540px, 100%); margin: 0 auto; padding: 0 28px 28px; }
 .topbar { height: 74px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line-soft); position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(14px); }
-.brand-wrap, .top-actions, .hero-meta, .capacity-copy, .panel-header > div, .execution-title-row, .execution-meta, .detail-title-row, .meta-line, .log-tabs { display:flex; align-items:center; }
+.brand-wrap, .top-actions, .capacity-copy, .panel-header > div, .execution-title-row, .execution-meta, .detail-title-row, .meta-line, .log-tabs { display:flex; align-items:center; }
 .brand-wrap { gap:11px; }
 .brand-mark { width:27px; height:27px; border:1px solid var(--line); border-radius:8px; display:grid; place-items:center; background:var(--surface); }
 .brand-mark span { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 15px color-mix(in srgb, var(--green) 65%, transparent); }
@@ -249,17 +239,13 @@ button { color: inherit; }
 .icon-button, .quiet-button { border:1px solid var(--line); background:var(--surface); border-radius:8px; cursor:pointer; transition:120ms ease; }
 .icon-button { width:32px; height:32px; }.quiet-button { padding:6px 10px; color:var(--text-2); font-size:12px; }
 .icon-button:hover,.quiet-button:hover { background:var(--surface-2); border-color:color-mix(in srgb, var(--line) 70%, var(--text-3)); }
-.hero { min-height:176px; display:flex; align-items:flex-end; justify-content:space-between; gap:30px; padding:42px 0 26px; }
-.eyebrow { font:600 10px/1 var(--mono); letter-spacing:.13em; color:var(--green); margin-bottom:13px; }
-h1 { font-size:32px; line-height:1.08; letter-spacing:-.035em; margin:0 0 10px; font-weight:650; }
-.hero p { margin:0; color:var(--text-2); max-width:650px; }
-.hero-meta { gap:10px; padding-bottom:2px; }
+.top-updated { font-family:var(--mono); font-size:10px; white-space:nowrap; }
 .health-pill { display:flex; align-items:center; gap:7px; border:1px solid var(--line); padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600; }
 .health-pill.healthy { color:var(--green); background:var(--green-soft); border-color:color-mix(in srgb, var(--green) 23%, var(--line)); }
 .health-pill.degraded { color:var(--red); background:var(--red-soft); border-color:color-mix(in srgb, var(--red) 24%, var(--line)); }
 .health-pill.neutral { color:var(--text-3); }
 .muted { color:var(--text-3); font-size:12px; }
-.summary-grid { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); }
+.summary-grid { margin-top:22px; display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); }
 .summary-card { min-height:105px; padding:19px 20px; display:grid; grid-template-rows:auto 1fr auto; border-right:1px solid var(--line-soft); }
 .summary-card:last-child { border-right:0; }
 .summary-card > span { color:var(--text-2); font-size:12px; }.summary-card strong { font:500 30px/1 var(--mono); letter-spacing:-.04em; align-self:center; }.summary-card small { color:var(--text-3); font-size:11px; }
@@ -269,7 +255,7 @@ h1 { font-size:32px; line-height:1.08; letter-spacing:-.035em; margin:0 0 10px; 
 .capacity-detail { color:var(--text-3); font:11px/1 var(--mono); white-space:nowrap; }
 .workspace { margin-top:18px; display:grid; grid-template-columns:minmax(390px,.88fr) minmax(540px,1.35fr); gap:14px; align-items:start; }
 .panel { border:1px solid var(--line); background:var(--surface); border-radius:var(--radius); overflow:hidden; }
-.execution-pane,.detail-pane { min-height:650px; height:calc(100vh - 330px); max-height:860px; }
+.execution-pane,.detail-pane { min-height:650px; height:calc(100vh - 275px); max-height:860px; }
 .panel-header { min-height:62px; padding:0 16px; border-bottom:1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between; }
 .panel-header > div { gap:9px; }.panel-header h2 { font-size:14px; margin:0; letter-spacing:-.01em; }.panel-header .muted { font-family:var(--mono); }
 .toolbar { padding:12px; border-bottom:1px solid var(--line-soft); display:grid; gap:10px; }
@@ -277,11 +263,11 @@ h1 { font-size:32px; line-height:1.08; letter-spacing:-.035em; margin:0 0 10px; 
 .search-wrap { height:34px; display:flex; align-items:center; gap:8px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-2); padding:0 9px; color:var(--text-3); }
 .search-icon { width:12px; height:12px; border:1px solid currentColor; border-radius:50%; position:relative; flex:0 0 auto; opacity:.75; }.search-icon:after { content:""; position:absolute; width:5px; height:1px; background:currentColor; right:-4px; bottom:-2px; transform:rotate(45deg); transform-origin:left center; }.search-wrap input { flex:1; min-width:0; border:0; outline:0; color:var(--text); background:transparent; font-size:12px; }.search-wrap input::placeholder{color:var(--text-3)} kbd { border:1px solid var(--line); background:var(--surface); border-radius:4px; padding:0 5px; font:10px/18px var(--mono); color:var(--text-3); }
 .execution-list { height:calc(100% - 147px); overflow:auto; overscroll-behavior:contain; }
-.task-group { border-bottom:1px solid var(--line); }.task-group:last-child{border-bottom:0}.task-group-header { position:sticky; top:0; z-index:2; min-height:43px; padding:9px 14px 8px; background:color-mix(in srgb,var(--surface) 94%,transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between; gap:12px; }.task-group-title{min-width:0}.task-group-title strong{display:block;font-size:11px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-group-title span{display:block;color:var(--text-3);font:9px/1.4 var(--mono);margin-top:2px}.task-group-meta{color:var(--text-3);font:9px/1 var(--mono);white-space:nowrap}.task-group.active .task-group-header{box-shadow:inset 2px 0 var(--green)}.task-group.queued .task-group-header{box-shadow:inset 2px 0 var(--amber)}.task-group.issues .task-group-header{box-shadow:inset 2px 0 var(--red)}
+.task-group { border-bottom:1px solid var(--line); }.task-group:last-child{border-bottom:0}.task-group-header { position:sticky; top:0; z-index:2; width:100%; min-height:48px; padding:8px 14px; border:0; border-bottom:1px solid var(--line-soft); background:color-mix(in srgb,var(--surface) 94%,transparent); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:space-between; gap:12px; text-align:left; cursor:pointer; }.task-group-header:hover{background:color-mix(in srgb,var(--surface-2) 92%,transparent)}.task-group-heading{display:flex;align-items:center;gap:9px;min-width:0}.task-chevron{width:12px;flex:0 0 12px;color:var(--text-3);font:14px/1 var(--mono);transform:rotate(0deg);transition:transform 120ms ease}.task-chevron.expanded{transform:rotate(90deg)}.task-group-title{min-width:0}.task-group-title strong{display:block;font-size:11px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-group-title span{display:block;color:var(--text-3);font:9px/1.4 var(--mono);margin-top:2px}.task-group-meta{color:var(--text-3);font:9px/1.3 var(--mono);white-space:nowrap;text-align:right}.task-group.active .task-group-header{box-shadow:inset 2px 0 var(--green)}.task-group.queued .task-group-header{box-shadow:inset 2px 0 var(--amber)}.task-group.issues .task-group-header{box-shadow:inset 2px 0 var(--red)}.task-executions{display:block}
 .execution-item { width:100%; display:block; text-align:left; border:0; border-bottom:1px solid var(--line-soft); background:transparent; padding:14px 15px 13px; cursor:pointer; transition:background 100ms ease; }
 .execution-item:hover { background:var(--surface-2); }.execution-item.selected { background:var(--blue-soft); box-shadow:inset 2px 0 var(--blue); }
 .execution-title-row { justify-content:space-between; gap:12px; }.execution-name { font-size:13px; font-weight:610; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.execution-time { color:var(--text-3); font:11px/1 var(--mono); flex:0 0 auto; }
-.execution-path { color:var(--text-3); font:11px/1.4 var(--mono); margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.execution-command { color:var(--text-2); font:11px/1.45 var(--mono); margin-top:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.execution-path { color:var(--text-3); font:10px/1.4 var(--mono); margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .execution-meta { gap:8px; margin-top:10px; min-width:0; }.state-badge,.activity-badge { display:inline-flex; align-items:center; gap:6px; font-size:10px; font-weight:650; letter-spacing:.03em; text-transform:uppercase; }.state-badge .status-dot { width:6px; height:6px; }
 .state-running{color:var(--green)}.state-queued{color:var(--amber)}.state-completed{color:var(--text-2)}.state-failed,.state-timed_out{color:var(--red)}.state-cancelled{color:var(--amber)}
 .state-running .status-dot { animation:pulse 1.9s ease infinite; } @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 30%,transparent)}50%{opacity:.75;box-shadow:0 0 0 4px transparent}}
@@ -301,12 +287,14 @@ h1 { font-size:32px; line-height:1.08; letter-spacing:-.035em; margin:0 0 10px; 
 .hidden { display:none !important; }
 footer { display:flex; justify-content:space-between; color:var(--text-3); font-size:10px; padding:18px 2px 0; }
 @media (max-width:1050px){.workspace{grid-template-columns:1fr}.execution-pane{height:540px;min-height:540px}.detail-pane{height:auto;min-height:620px;max-height:none;position:static}.execution-list{height:393px}}
-@media (max-width:720px){.app-shell{padding:0 14px 18px}.topbar{height:62px}.connection span:last-child{display:none}.hero{min-height:155px;padding:32px 0 22px;align-items:flex-start;flex-direction:column;gap:17px}.hero-meta{padding:0}h1{font-size:26px}.summary-grid{grid-template-columns:1fr 1fr}.summary-card:nth-child(2){border-right:0}.summary-card:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.summary-card{min-height:92px;padding:15px}.capacity-panel{grid-template-columns:1fr auto}.capacity-track{grid-column:1/-1;grid-row:2}.workspace{margin-top:12px}.execution-pane{height:520px;min-height:520px}.execution-list{height:373px}.detail-grid{grid-template-columns:1fr 1fr}.detail-section{padding:16px}.trace-event{grid-template-columns:70px 13px minmax(0,1fr);gap:7px}.log-output{height:240px}}
+@media (max-width:720px){.app-shell{padding:0 14px 18px}.topbar{height:62px}.top-updated{display:none}.connection span:last-child{display:none}.health-pill{padding:6px 8px}.summary-grid{margin-top:14px;grid-template-columns:1fr 1fr}.summary-card:nth-child(2){border-right:0}.summary-card:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.summary-card{min-height:92px;padding:15px}.capacity-panel{grid-template-columns:1fr auto}.capacity-track{grid-column:1/-1;grid-row:2}.workspace{margin-top:12px}.execution-pane{height:520px;min-height:520px}.execution-list{height:373px}.task-group-meta{max-width:100px;overflow:hidden;text-overflow:ellipsis}.detail-grid{grid-template-columns:1fr 1fr}.detail-section{padding:16px}.trace-event{grid-template-columns:70px 13px minmax(0,1fr);gap:7px}.log-output{height:240px}}
 `;
 
 const RUNTIME_JS = `
 (() => {
   'use strict';
+
+  const TASK_EXPANSION_KEY = 'exec-mcp-runtime-task-expansion-v1';
 
   const state = {
     overview: null,
@@ -325,8 +313,20 @@ const RUNTIME_JS = `
     follow: true,
     logScrollTop: 0,
     lastSuccessAt: 0,
-    selectedGeneration: 0
+    selectedGeneration: 0,
+    taskExpansion: loadTaskExpansion()
   };
+
+  function loadTaskExpansion() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(TASK_EXPANSION_KEY) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch { return {}; }
+  }
+
+  function saveTaskExpansion() {
+    try { localStorage.setItem(TASK_EXPANSION_KEY, JSON.stringify(state.taskExpansion)); } catch {}
+  }
 
   const byId = (id) => document.getElementById(id);
   const els = {
@@ -493,6 +493,44 @@ const RUNTIME_JS = `
     return context.label || (item.task_handle ? 'Task ' + shortId(item.task_handle.replace(/^task-/, ''), 12) : 'Ungrouped / legacy');
   }
 
+  function defaultTaskExpanded(items) {
+    return items.some((item) => statusOf(item) === 'running' || statusOf(item) === 'queued' || issueItem(item));
+  }
+
+  function taskExpanded(taskHandle, items) {
+    const override = state.taskExpansion[taskHandle];
+    if (typeof override === 'boolean') return override;
+    if (state.search) return true;
+    return defaultTaskExpanded(items);
+  }
+
+  function toggleTask(taskHandle, items) {
+    state.taskExpansion[taskHandle] = !taskExpanded(taskHandle, items);
+    saveTaskExpansion();
+    renderExecutionList();
+  }
+
+  function taskLastActivity(items) {
+    let latest = null;
+    for (const item of items) {
+      const candidate = item.last_activity_at || item.finished_at || item.running_at || item.created_at || null;
+      if (candidate && (!latest || Date.parse(candidate) > Date.parse(latest))) latest = candidate;
+    }
+    return latest;
+  }
+
+  function taskGroupMeta(items) {
+    const running = items.filter((item) => statusOf(item) === 'running').length;
+    const queued = items.filter((item) => statusOf(item) === 'queued').length;
+    const issues = items.filter(issueItem).length;
+    const count = items.length + (items.length === 1 ? ' execution' : ' executions');
+    if (running) return running + ' running · ' + count;
+    if (queued) return queued + ' queued · ' + count;
+    if (issues) return issues + (issues === 1 ? ' issue · ' : ' issues · ') + count;
+    const latest = taskLastActivity(items);
+    return count + (latest ? ' · ' + relativeTime(latest) : '');
+  }
+
   function renderExecutionList() {
     const items = state.executions.filter(matchesFilter).filter(matchesSearch);
     const groups = new Map();
@@ -508,20 +546,25 @@ const RUNTIME_JS = `
     const fragment = document.createDocumentFragment();
     for (const [taskHandle, taskItems] of groups) {
       const group = make('section', 'task-group ' + taskGroupStatus(taskItems));
-      const header = make('div', 'task-group-header');
+      const expanded = taskExpanded(taskHandle, taskItems);
+      const header = make('button', 'task-group-header');
+      header.type = 'button';
+      header.setAttribute('aria-expanded', String(expanded));
+      const heading = make('div', 'task-group-heading');
+      const chevron = make('span', 'task-chevron' + (expanded ? ' expanded' : ''), '›');
+      chevron.setAttribute('aria-hidden', 'true');
       const title = make('div', 'task-group-title');
       const first = taskItems[0] || {};
-      const context = first.task_context || {};
       append(title,
         make('strong', '', taskGroupLabel(first)),
         make('span', '', taskHandle === '__ungrouped__' ? 'No explicit task context' : shortId(taskHandle, 44))
       );
-      const activeCount = taskItems.filter((item) => statusOf(item) === 'running').length;
-      const queuedCount = taskItems.filter((item) => statusOf(item) === 'queued').length;
-      const suffix = activeCount ? activeCount + ' running' : queuedCount ? queuedCount + ' queued' : taskItems.length + (taskItems.length === 1 ? ' execution' : ' executions');
-      append(header, title, make('span', 'task-group-meta', suffix));
+      append(heading, chevron, title);
+      append(header, heading, make('span', 'task-group-meta', taskGroupMeta(taskItems)));
+      header.addEventListener('click', () => toggleTask(taskHandle, taskItems));
       group.appendChild(header);
 
+      const children = make('div', 'task-executions' + (expanded ? '' : ' hidden'));
       for (const item of taskItems) {
         const status = statusOf(item);
         const button = make('button', 'execution-item' + (state.selectedId === item.exec_id ? ' selected' : ''));
@@ -530,6 +573,7 @@ const RUNTIME_JS = `
 
         const titleRow = make('div', 'execution-title-row');
         append(titleRow, make('span', 'execution-name', displayName(item)), make('span', 'execution-time', durationFor(item)));
+        const command = item.command_preview ? make('div', 'execution-command', item.command_preview) : null;
         const path = make('div', 'execution-path', item.cwd || 'cwd unavailable');
 
         const meta = make('div', 'execution-meta');
@@ -537,10 +581,11 @@ const RUNTIME_JS = `
         append(badge, make('span', 'status-dot'), make('span', '', statusLabel(status)));
         const activity = activityFor(item);
         append(meta, badge, make('span', 'activity-badge ' + activity.className, activity.label), make('span', 'execution-id-short', shortId(item.exec_id.replace(/^exec-/, ''), 8)));
-        append(button, titleRow, path, meta);
+        append(button, titleRow, command, path, meta);
         button.addEventListener('click', () => selectExecution(item.exec_id));
-        group.appendChild(button);
+        children.appendChild(button);
       }
+      group.appendChild(children);
       fragment.appendChild(group);
     }
     els.list.appendChild(fragment);
@@ -759,6 +804,8 @@ const RUNTIME_JS = `
 
   async function selectExecution(execId) {
     if (state.selectedId === execId && state.detail) return;
+    const selected = state.executions.find((item) => item.exec_id === execId);
+    if (selected && selected.task_handle) { state.taskExpansion[selected.task_handle] = true; saveTaskExpansion(); }
     state.selectedId = execId;
     state.selectedGeneration++;
     state.detail = null; state.stdoutCursor = null; state.stderrCursor = null; state.stdout = ''; state.stderr = ''; state.logScrollTop = 0;
@@ -795,6 +842,10 @@ const RUNTIME_JS = `
         if (preferred) {
           state.selectedId = preferred;
           state.selectedGeneration++;
+          if (hashed) {
+            const selected = state.executions.find((item) => item.exec_id === preferred);
+            if (selected && selected.task_handle) { state.taskExpansion[selected.task_handle] = true; saveTaskExpansion(); }
+          }
         }
       }
       renderExecutionList();

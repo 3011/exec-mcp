@@ -64,12 +64,17 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.match(body, /Execution MCP/);
     assert.match(body, /Runtime Console/);
     assert.match(body, /Read only/);
+    assert.match(body, /<h2>Tasks<\/h2>/);
+    assert.doesNotMatch(body, /LIVE OBSERVABILITY|What is running right now\?|Read-only visibility into task contexts/);
 
     const js = await fetch(`${base}/runtime/assets/app.js`);
     assert.equal(js.status, 200);
     const script = await js.text();
     assert.doesNotThrow(() => new Function(script));
     assert.doesNotMatch(script, /\.innerHTML\s*=/);
+    assert.match(script, /taskExpansion/);
+    assert.match(script, /aria-expanded/);
+    assert.match(script, /execution-command/);
 
     const denied = await fetch(`${base}/runtime/api/overview`, { method: 'POST' });
     assert.equal(denied.status, 405);
@@ -106,6 +111,7 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
     assert.equal(listed.origin.task_handle, taskHandle);
     assert.equal(listed.task_handle, taskHandle);
     assert.equal(listed.task_context.label, 'runtime task grouping');
+    assert.match(listed.command_preview, /hello-runtime/);
     assert.match(listed.trace_id, /^trace-/);
     assert.doesNotMatch(JSON.stringify(listed), new RegExp(secret));
 
@@ -134,7 +140,7 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
     assert.match(logs.stdout, /done/);
     assert.doesNotMatch(logs.stdout, new RegExp(secret));
     assert.match(logs.stdout, /\[REDACTED\]/);
-  });
+  }, { EXPOSE_REDACTED_COMMAND_PREVIEW: 'true' });
 });
 
 test('Runtime overview is observation-only and leaves existing MCP and metrics surfaces independent', async () => {
