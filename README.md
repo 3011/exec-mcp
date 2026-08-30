@@ -107,9 +107,22 @@ npm start
 
 - `GET /healthz`
 - `GET /metrics`
+- `GET /runtime` read-only Runtime Console
+- `GET /runtime/api/*` read-only runtime observation API
 - `POST /exec` with `Accept: text/event-stream`
 - `POST /mcp` for MCP Streamable HTTP / JSON-RPC
 - Optional separate metrics listener on `METRICS_PORT`
+
+
+### Runtime Console
+
+`GET /runtime` serves a dependency-free, read-only execution viewer from the main listener. It is intentionally not exposed by the optional `METRICS_PORT` listener and provides no run, retry, cancel, kill, or other mutation endpoint.
+
+The console focuses on current execution state rather than historical metrics: running/queued jobs, capacity, last runtime activity, last output time, retained stdout/stderr, origin metadata, and a bounded lifecycle trace. Activity and output are deliberately separate signals: a job can remain alive and observable while producing no output. Quiet periods are never labeled as hung or stuck without proof.
+
+Trace origin records only facts the server actually receives. An MCP transport session identifier may be shown, but it is explicitly not treated as a ChatGPT conversation identifier. The observation model reserves `task_handle` as `null` for a possible future opt-in design where a client explicitly supplies a stable task/conversation handle; v1 does not change MCP tool schemas to add that capability.
+
+Runtime state, traces, and retained output remain bounded and process-local, matching the existing Job Manager lifecycle. The console uses the same externally authenticated network boundary as the main service; there is no separate built-in Runtime Console authentication layer.
 
 ### MCP initialization
 
@@ -210,7 +223,7 @@ Use `export_remote_file` for the reverse direction. It streams the remote file i
 
 Exports larger than `ARTIFACT_EMBED_MAX_BYTES` are rejected with `file_too_large`; the service deliberately provides no `resource_link`, public download URL, or large-file fallback. The embedded `blob` is Base64 at the MCP protocol layer, so the practical ceiling must account for Base64 expansion, JSON framing, tunnel limits, host materialization limits, and gateway memory. The hard maximum and default are 1.45 MB (1,450,000 bytes). This conservative ceiling is covered by backend boundary tests and intentionally leaves margin below the platform-sensitive range observed during ChatGPT host ingestion/materialization testing.
 
-Secure MCP Tunnel carries the embedded bytes inside MCP JSON-RPC, so remote-to-ChatGPT export requires no public artifact ingress. Keep `/mcp`, `/exec`, `/metrics`, and `/healthz` private behind the authenticated transport.
+Secure MCP Tunnel carries the embedded bytes inside MCP JSON-RPC, so remote-to-ChatGPT export requires no public artifact ingress. Keep `/mcp`, `/exec`, `/runtime`, `/runtime/api/*`, `/metrics`, and `/healthz` private behind the authenticated transport.
 
 ## Development
 
@@ -221,7 +234,7 @@ npm run test:memory  # bounded-output and RSS smoke test
 npm run validate     # tests, HTTP/SSE, and memory smoke tests
 ```
 
-Runtime source is organized by responsibility: `server.ts` for HTTP composition and lifecycle, `mcp-handler.ts` for JSON-RPC dispatch, `tool-schemas.ts` for stable schemas, `artifact-transfer.ts` for verified bidirectional file transfer, and `metrics.ts` for Prometheus rendering.
+Runtime source is organized by responsibility: `server.ts` for HTTP composition and lifecycle, `mcp-handler.ts` for JSON-RPC dispatch, `tool-schemas.ts` for stable schemas, `artifact-transfer.ts` for verified bidirectional file transfer, `runtime-observer.ts` for bounded execution observations/traces, `runtime-console.ts` for the read-only browser surface, and `metrics.ts` for Prometheus rendering.
 
 CI runs the test suite and builds the container. CodeQL and Dependabot configuration are included in the repository.
 

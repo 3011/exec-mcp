@@ -10,6 +10,7 @@ import type { ExecEvent } from './exec-runner.js';
 import { renderMetrics } from './metrics.js';
 import { handleMcpMessage, McpRequestRegistry } from './mcp-handler.js';
 import { ArtifactTransferManager } from './artifact-transfer.js';
+import { handleRuntimeRequest } from './runtime-console.js';
 
 const DEFAULT_MCP_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 
@@ -46,6 +47,10 @@ export function createServer(config: ExecMcpConfig = parseConfig()): { server: H
         res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
         res.end(renderMetrics(runner));
         return;
+      }
+
+      if (req.url && req.url.startsWith('/runtime')) {
+        if (await handleRuntimeRequest(req, res, runner)) return;
       }
 
       if (req.method === 'POST' && req.url === '/exec') {
@@ -95,7 +100,14 @@ async function handleSseExec(req: IncomingMessage, res: ServerResponse, runner: 
 
   const emit = (event: ExecEvent): void => writeSse(res, event.type || 'message', event);
   try {
-    await runner.run(body, emit, { abortSignal: abortController.signal, abortReason: 'http_disconnect', abortSource: 'http' });
+    await runner.run(body, emit, {
+      abortSignal: abortController.signal,
+      abortReason: 'http_disconnect',
+      abortSource: 'http',
+      traceId: runner.runtimeObserver.newTraceId(),
+      requestReceivedAt: Date.now(),
+      origin: { kind: 'http_sse', tool: '/exec', request_id: null, transport_session_id: null }
+    });
   } catch (err) {
     const code = err instanceof ExecRejectedError ? err.code : 'internal_error';
     writeSse(res, 'error', { type: 'error', code, message: errorMessage(err) });

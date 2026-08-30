@@ -138,6 +138,19 @@ Status records contain sanitized operational metadata rather than full commands 
 
 V1 Job Manager metadata and retained logs are process-local. Service restart does not recover queued/running jobs or prior in-memory status records; graceful shutdown first requests termination of current jobs.
 
+
+## Runtime observability
+
+The Runtime Console is a separate read-only observation plane on the main HTTP listener. It does not reuse MCP mutation tools and defines no runtime write endpoint. `POST`, `PUT`, `PATCH`, and `DELETE` requests under `/runtime` are rejected; the optional metrics listener does not serve the console.
+
+The primary UI object is an Execution, not a guessed chat session. Each observation owns a generated `trace_id`, bounded lifecycle events, last runtime activity, first/last output timestamps, byte counters, safe execution metadata, and an origin record. MCP origin may include the transport session and typed JSON-RPC request id, but those fields are not interpreted as a ChatGPT conversation identity.
+
+`last_activity_at` is refreshed by lifecycle transitions, output, and the existing runner heartbeat. `last_output_at` changes only when stdout/stderr bytes are observed. This distinction lets the UI state that an execution is still active while also showing a long quiet period without claiming that the workload is stuck.
+
+Trace events are metadata-only and bounded. They intentionally avoid raw request arguments, environment values, and output payloads. Retained output shown by the console comes from the same bounded, environment-aware redacted Job Manager buffers used by `get_exec_status`.
+
+A future client may explicitly provide a stable `task_handle`/conversation handle to group executions across calls. The v1 observation schema reserves this field as `null`; no MCP tool schema or model behavior changes are part of the Runtime Console release.
+
 ## Circuit breaker
 
 A reaper first requests cancellation for overdue records. If the local SSH transport still does not confirm exit after the emergency grace window, the registry may force-finalize the stale record and open the execution circuit.

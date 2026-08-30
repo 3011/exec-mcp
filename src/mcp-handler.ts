@@ -134,6 +134,7 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
   }
 
   if (method === 'tools/call') {
+    const requestReceivedAt = Date.now();
     const name = params.name;
     const args: UnknownRecord = isRecord(params.arguments) ? params.arguments : {};
     try {
@@ -149,7 +150,15 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
             abortSignal: requestRecord.abortController.signal,
             abortReason: requestRecord.cancelSource === 'mcp_notification' ? 'mcp_notification_cancel' : 'http_disconnect',
             abortSource: requestRecord.cancelSource || 'http',
-            onAcquire: (rec: ExecutionRecord) => { requestRecord.execId = rec.id; }
+            onAcquire: (rec: ExecutionRecord) => { requestRecord.execId = rec.id; },
+            traceId: runner.runtimeObserver.newTraceId(),
+            requestReceivedAt,
+            origin: {
+              kind: 'mcp',
+              tool: 'exec',
+              transport_session_id: context.sessionId,
+              request_id: typedRequestKey(id)
+            }
           });
           const text = renderToolText(summary);
           return toolResult(id, text, summary.code !== 0 || summary.timed_out === true, execStructuredContent(summary));
@@ -161,7 +170,16 @@ export async function handleMcpMessage(msg: unknown, runner: ExecRunner, artifac
       }
       if (name === 'start_exec') {
         if (context.isBatch) return toolResult(id, 'start_exec_not_supported_in_batch: Send start_exec as a standalone JSON-RPC request.', true);
-        const result = runner.start(args);
+        const result = runner.start(args, {
+          traceId: runner.runtimeObserver.newTraceId(),
+          requestReceivedAt,
+          origin: {
+            kind: 'mcp',
+            tool: 'start_exec',
+            transport_session_id: context.sessionId,
+            request_id: typedRequestKey(id)
+          }
+        });
         return toolResult(id, JSON.stringify(result, null, 2), false, result);
       }
       if (name === 'list_active_execs') {

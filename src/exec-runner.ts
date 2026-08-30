@@ -9,6 +9,8 @@ import { JobOutputRedactor } from './job-output-redactor.js';
 import { redact } from './redact.js';
 import { ExecRegistry, ExecutionCircuitOpenError } from './exec-registry.js';
 import type { AbortReason, ExecutionClass, ExecutionHistoryRecord, ExecutionRecord, ExecutionState, FinalExecutionState } from './exec-registry.js';
+import { RuntimeObserver, runtimeStateLevel } from './runtime-observer.js';
+import type { RuntimeOrigin } from './runtime-observer.js';
 
 type UnknownRecord = Record<string, unknown>;
 type EventPayload = { type: string; [key: string]: unknown };
@@ -49,6 +51,9 @@ export interface RunOptions {
   abortReason?: AbortReason;
   abortSource?: string;
   onAcquire?: (record: ExecutionRecord) => void;
+  traceId?: string;
+  origin?: Partial<RuntimeOrigin>;
+  requestReceivedAt?: number;
 }
 
 export interface GetStatusOptions {
@@ -117,6 +122,7 @@ export class ExecRunner {
   readonly config: ExecMcpConfig;
   readonly registry: ExecRegistry;
   readonly metrics: ExecMetrics;
+  readonly runtimeObserver: RuntimeObserver;
   private readonly jobs = new Map<string, ManagedJob>();
   private readonly queue: string[] = [];
   private scheduling = false;
@@ -130,11 +136,15 @@ export class ExecRunner {
       reapGraceMs: config.registryReapGraceSeconds * 1000,
       emergencyReapMs: config.emergencyReapSeconds * 1000
     });
-    this.registry.onEmergencyReap = (record) => this.logLifecycle('unconfirmed_reaped', record?.exec_id, {
+    this.runtimeObserver = new RuntimeObserver({ maxExecutions: Math.max(100, config.recentHistoryLimit * 2) });
+    this.registry.onEmergencyReap = (record) => {
+      if (record?.exec_id) this.runtimeObserver.event(record.exec_id, 'unconfirmed_reaped', { level: 'error', detail: 'transport exit was not confirmed' });
+      this.logLifecycle('unconfirmed_reaped', record?.exec_id, {
       abort_source: record?.abort_source,
       transport_exit_confirmed: false,
       remote_exit_confirmed: null
-    });
+      });
+    };
     this.metrics = {
       requestsTotal: 0,
       rejectedTotal: new Map<string, number>(),
@@ -214,8 +224,8 @@ export class ExecRunner {
     return await job.completion;
   }
 
-  start(input: unknown): ReturnType<ExecRunner['startResult']> {
-    const job = this.submit(input, 'async', () => {});
+  start(input: unknown, options: RunOptions = {}): ReturnType<ExecRunner['startResult']> {
+    const job = this.submit(input, 'async', () => {}, options);
     return this.startResult(job);
   }
 
@@ -224,8 +234,10 @@ export class ExecRunner {
     throwIfAborted(options.abortSignal);
 
     let spec: ExecutionSpec;
+    let validatedAt: number;
     try {
       spec = this.validate(input);
+      validatedAt = Date.now();
     } catch (err) {
       if (err instanceof ExecRejectedError) this.bumpRejected(err.code);
       throw err;
@@ -268,6 +280,23 @@ export class ExecRunner {
       throw err;
     }
 
+    const runtimeRegistration: Parameters<RuntimeObserver['registerExecution']>[0] = {
+      execId: rec.id,
+      createdAt: rec.createdAt,
+      executionClass,
+      label: spec.label,
+      cwd: spec.cwd,
+      commandPreview: spec.commandPreview,
+      commandSha256: spec.commandSha256,
+      commandLength: spec.commandLength,
+      timeoutSeconds: spec.timeoutSeconds,
+      validatedAt
+    };
+    if (options.traceId !== undefined) runtimeRegistration.traceId = options.traceId;
+    if (options.origin !== undefined) runtimeRegistration.origin = options.origin;
+    if (options.requestReceivedAt !== undefined) runtimeRegistration.requestReceivedAt = options.requestReceivedAt;
+    this.runtimeObserver.registerExecution(runtimeRegistration);
+
     let resolveCompletion!: (summary: ExecSummary) => void;
     let rejectCompletion!: (error: unknown) => void;
     const completion = new Promise<ExecSummary>((resolveJob, rejectJob) => {
@@ -295,6 +324,7 @@ export class ExecRunner {
     if (options.abortSignal) job.abortSignal = options.abortSignal;
     this.jobs.set(rec.id, job);
     this.queue.push(rec.id);
+    this.runtimeObserver.event(rec.id, 'queued', { detail: canStartNow ? 'admission available' : 'waiting for execution capacity' });
     options.onAcquire?.(rec);
 
     if (options.abortSignal) {
@@ -330,6 +360,7 @@ export class ExecRunner {
         const job = this.jobs.get(id);
         if (!job || job.started || job.record.state !== 'queued') continue;
         if (!this.registry.markStarting(id)) continue;
+        this.runtimeObserver.event(id, 'starting');
         job.started = true;
         void this.executeJob(job).then(
           (summary) => this.settleJob(job, summary),
@@ -417,6 +448,7 @@ export class ExecRunner {
     const onRegistryAbort = (): void => {
       const reasonCode = abortReasonCode(rec.controller.signal.reason);
       this.bumpMap(this.metrics.abortRequestedTotal, reasonCode);
+      this.runtimeObserver.event(rec.id, 'abort_requested', { level: runtimeStateLevel(rec.state), detail: `${reasonCode} · ${rec.abortSource || 'unknown source'}` });
       this.logLifecycle(rec.state, rec.id, { abort_source: rec.abortSource, transport_pid: rec.transportPid });
       if (reasonCode === 'request_timeout' || reasonCode === 'reaper_grace_exceeded') {
         timedOut = true;
@@ -446,18 +478,21 @@ export class ExecRunner {
       child = spawned.child;
       req.env = {};
       this.registry.markTransportStarted(rec.id, child.pid);
+      this.runtimeObserver.event(rec.id, 'transport_started', { detail: child.pid ? `pid ${child.pid}` : null });
       if (spawned.stdin) child.stdin.end(spawned.stdin);
 
       if (!this.registry.markRunning(rec.id)) {
         if (rec.controller.signal.aborted) onRegistryAbort();
       } else {
         this.metrics.startedTotal++;
+        this.runtimeObserver.event(rec.id, 'execution_running');
         this.logLifecycle('running', rec.id, { label: rec.label, execution_class: rec.executionClass, transport_pid: child.pid });
       }
       send({ type: 'start', transport_pid: child.pid, started_at: new Date(rec.runningAt || rec.createdAt).toISOString(), cwd: req.cwd });
 
       const maybeForward = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
         const len = chunk.length;
+        this.runtimeObserver.output(rec.id, stream, len);
         const streamText = redact(chunk.toString('utf8'));
         const jobLogText = stream === 'stdout' ? job.stdoutRedactor.push(chunk) : job.stderrRedactor.push(chunk);
         if (stream === 'stdout') {
@@ -491,6 +526,7 @@ export class ExecRunner {
       child.stderr.on('data', (chunk: Buffer) => maybeForward('stderr', chunk));
 
       heartbeat = setInterval(() => {
+        this.runtimeObserver.touch(rec.id);
         send({
           type: 'heartbeat',
           elapsed_ms: Date.now() - acceptedAt.getTime(),
@@ -507,6 +543,7 @@ export class ExecRunner {
           if (finished) return;
           finished = true;
           childExited = true;
+          this.runtimeObserver.event(rec.id, 'transport_closed', { detail: code !== null ? `exit ${code}` : signal });
           const stdoutRemainder = job.stdoutRedactor.flush();
           const stderrRemainder = job.stderrRedactor.flush();
           if (stdoutRemainder) job.stdoutLog.append(stdoutRemainder);
@@ -638,11 +675,133 @@ export class ExecRunner {
     return { ...state, task, ...output };
   }
 
+  runtimeOverview(now = Date.now()) {
+    const active = this.listActive();
+    const recent = [...this.registry.recent].slice(-20);
+    return {
+      generated_at: new Date(now).toISOString(),
+      health: this.registry.circuitOpen ? 'degraded' : 'healthy',
+      circuit_open: this.registry.circuitOpen,
+      counts: {
+        running: active.active,
+        queued: active.queued,
+        recent_completed: recent.filter((item) => item.status === 'completed').length,
+        recent_failed: recent.filter((item) => item.status === 'failed' || item.status === 'timed_out').length
+      },
+      capacity: {
+        running: active.active,
+        global_max: active.global_max_concurrent,
+        sync_running: active.sync_running,
+        sync_max: active.sync_max_concurrent,
+        async_running: active.async_running,
+        async_max: active.async_max_concurrent,
+        queued: active.queued,
+        queue_max: active.max_queue
+      },
+      totals: {
+        requests: this.metrics.requestsTotal,
+        started: this.metrics.startedTotal,
+        timed_out: this.metrics.timeoutTotal,
+        truncated: this.metrics.truncatedTotal
+      }
+    };
+  }
+
+  runtimeListExecutions(limit = this.config.recentHistoryLimit) {
+    const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    const active = this.registry.listActive().map((task) => ({
+      ...task,
+      queue_position: this.queuePosition(task.exec_id),
+      lifecycle: 'active' as const,
+      finished_at: null,
+      duration_ms: null,
+      final_state: null,
+      ...this.runtimeObserver.fields(task.exec_id)
+    }));
+    const seen = new Set(active.map((task) => task.exec_id));
+    const finished: Array<Record<string, unknown> & { exec_id: string; created_at: string }> = [];
+    const candidates = [
+      ...[...this.registry.unconfirmed.values()].reverse(),
+      ...[...this.registry.recent].reverse()
+    ];
+    for (const task of candidates) {
+      if (seen.has(task.exec_id)) continue;
+      seen.add(task.exec_id);
+      const observation = this.runtimeObserver.get(task.exec_id);
+      finished.push({
+        ...task,
+        lifecycle: 'finished',
+        state: task.final_state,
+        cwd: observation?.cwd ?? null,
+        command_preview: observation?.command_preview ?? null,
+        ...this.runtimeObserver.fields(task.exec_id)
+      });
+    }
+    return [...active, ...finished]
+      .sort((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+      .slice(0, boundedLimit);
+  }
+
+  runtimeDetail(execId: string) {
+    const state = this.registry.status(execId);
+    if (!state.found) return state;
+    const job = this.jobs.get(execId);
+    const task = state.source === 'active'
+      ? { ...state.task, queue_position: this.queuePosition(execId), ...this.runtimeObserver.fields(execId) }
+      : { ...state.task, ...this.runtimeObserver.fields(execId) };
+    return {
+      found: true as const,
+      source: state.source,
+      task,
+      observation: this.runtimeObserver.get(execId),
+      logs: job ? {
+        available: true,
+        stdout_start_cursor: job.stdoutLog.startCursor,
+        stdout_end_cursor: job.stdoutLog.endCursor,
+        stderr_start_cursor: job.stderrLog.startCursor,
+        stderr_end_cursor: job.stderrLog.endCursor,
+        stdout_truncated: job.stdoutLog.truncated,
+        stderr_truncated: job.stderrLog.truncated
+      } : {
+        available: false,
+        stdout_start_cursor: 0,
+        stdout_end_cursor: 0,
+        stderr_start_cursor: 0,
+        stderr_end_cursor: 0,
+        stdout_truncated: false,
+        stderr_truncated: false
+      }
+    };
+  }
+
+  runtimeLogs(execId: string, options: { stdoutCursor?: number; stderrCursor?: number; maxOutputBytes?: number } = {}) {
+    const state = this.registry.status(execId);
+    if (!state.found) return state;
+    const stdoutCursor = statusCursor(options.stdoutCursor, 'stdout_cursor');
+    const stderrCursor = statusCursor(options.stderrCursor, 'stderr_cursor');
+    const maxOutputBytes = statusBoundedInt(
+      options.maxOutputBytes,
+      Math.min(65536, this.config.statusHardMaxOutputBytes),
+      1,
+      this.config.statusHardMaxOutputBytes,
+      'invalid_status_output_limit',
+      'status_output_limit_too_large'
+    );
+    return {
+      found: true as const,
+      exec_id: execId,
+      ...this.readJobOutput(this.jobs.get(execId), stdoutCursor, stderrCursor, maxOutputBytes)
+    };
+  }
+
   cancel(execId: string) {
     const job = this.jobs.get(execId);
     const result = this.registry.requestCancel(execId);
     this.bumpMap(this.metrics.cancelRequestsTotal, result.result);
-    if (result.result === 'accepted' && job && !job.started) this.finishUnstartedJob(job);
+    if (result.result === 'accepted' && job && !job.started) {
+      this.runtimeObserver.event(execId, 'abort_requested', { level: 'warning', detail: 'manual_cancel · manual_tool' });
+      this.finishUnstartedJob(job);
+    }
     return result;
   }
 
@@ -675,7 +834,10 @@ export class ExecRunner {
   private abortJob(execId: string, reason: AbortReason, source: string): void {
     const job = this.jobs.get(execId);
     const result = this.registry.requestAbort(execId, reason, source);
-    if (result.accepted && job && !job.started) this.finishUnstartedJob(job);
+    if (result.accepted && job && !job.started) {
+      this.runtimeObserver.event(execId, 'abort_requested', { level: runtimeStateLevel(job.record.state), detail: `${reason} · ${source}` });
+      this.finishUnstartedJob(job);
+    }
   }
 
   private finishUnstartedJob(job: ManagedJob): void {
@@ -713,6 +875,7 @@ export class ExecRunner {
     if (!record?.final_state) return;
     this.bumpMap(this.metrics.finishedTotal, record.final_state);
     this.observeDuration(record.final_state, record.duration_ms);
+    this.runtimeObserver.finish(record.exec_id, record);
     this.logLifecycle(record.final_state, record.exec_id, {
       label: record.label,
       execution_class: record.execution_class,

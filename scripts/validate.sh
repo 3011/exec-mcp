@@ -44,6 +44,10 @@ grep -q 'hello' "$OUT_FILE"
 grep -q 'warn' "$OUT_FILE"
 
 curl -fsS "http://127.0.0.1:${PORT_VALUE}/metrics" | grep -q 'exec_mcp_requests_total'
+curl -fsS "http://127.0.0.1:${PORT_VALUE}/runtime" | grep -q 'Runtime Console'
+curl -fsS "http://127.0.0.1:${PORT_VALUE}/runtime/api/overview" | grep -q '"health":"healthy"'
+RUNTIME_POST_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${PORT_VALUE}/runtime/api/overview")
+test "$RUNTIME_POST_STATUS" = 405
 
 bash scripts/memory-smoke.sh
 
