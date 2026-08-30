@@ -722,12 +722,8 @@ const RUNTIME_JS = `
     if (panel) state.detailScroll[state.detailTab] = panel.scrollTop;
   }
 
-  function defaultDetailTab(detail) {
-    const task = detail && detail.task ? detail.task : {};
-    if (issueItem(task) || task.final_state === 'unconfirmed_reaped') return 'trace';
-    const observation = detail && detail.observation ? detail.observation : {};
-    const outputBytes = Number(observation.stdout_bytes || 0) + Number(observation.stderr_bytes || 0);
-    return outputBytes > 0 ? 'output' : 'trace';
+  function defaultDetailTab() {
+    return 'details';
   }
 
   function setDetailTab(next) {
@@ -915,7 +911,7 @@ const RUNTIME_JS = `
     if (selected && selected.task_handle) { state.taskExpansion[selected.task_handle] = true; saveTaskExpansion(); }
     state.selectedId = execId;
     state.selectedGeneration++;
-    state.detail = null; state.stdoutCursor = null; state.stderrCursor = null; state.stdout = ''; state.stderr = ''; state.logScrollTop = 0; state.detailTab = null; state.detailScroll = { trace: 0, details: 0 };
+    state.detail = null; state.stdoutCursor = null; state.stderrCursor = null; state.stdout = ''; state.stderr = ''; state.logScrollTop = 0; state.detailScroll = { trace: 0, details: 0 };
     history.replaceState(null, '', '#exec=' + encodeURIComponent(execId));
     renderExecutionList();
     els.detailEmpty.classList.remove('hidden');

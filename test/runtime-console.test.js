@@ -85,6 +85,8 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.match(script, /execution-command/);
     assert.match(script, /detail-tabs/);
     assert.match(script, /defaultDetailTab/);
+    assert.match(script, /function defaultDetailTab\(\) \{\s*return 'details';/);
+    assert.doesNotMatch(script, /state\.detailTab = null; state\.detailScroll/);
     assert.match(script, /\['details', 'trace', 'output'\]/);
     assert.match(script, /Elapsed time until the next lifecycle event/);
     assert.match(script, /trace-delta/);
