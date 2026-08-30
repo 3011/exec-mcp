@@ -28,6 +28,11 @@ RUN apk add --no-cache openssh-client \
     && mkdir -p /run/secrets
 COPY package.json README.md DESIGN.md LICENSE ./
 COPY --from=build /app/dist ./dist
+# Source checkout modes are not trusted: Kubernetes runs this image as an arbitrary
+# non-root UID/GID (currently 1000:1000), so runtime files must be world-readable
+# and directories traversable while remaining non-writable.
+RUN chmod 0644 package.json README.md DESIGN.md LICENSE \
+    && chmod -R a+rX,go-w /app/dist
 EXPOSE 8080 9090
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["node", "dist/src/server.js"]
