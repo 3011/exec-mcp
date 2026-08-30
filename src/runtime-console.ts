@@ -165,7 +165,7 @@ const RUNTIME_HTML = `<!doctype html>
               <button class="filter" data-filter="finished" type="button">Finished</button>
             </div>
             <label class="search-wrap">
-              <span aria-hidden="true">⌕</span>
+              <span class="search-icon" aria-hidden="true"></span>
               <input id="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search label, cwd, id…">
               <kbd>/</kbd>
             </label>
@@ -270,12 +270,12 @@ h1 { font-size:32px; line-height:1.08; letter-spacing:-.035em; margin:0 0 10px; 
 .workspace { margin-top:18px; display:grid; grid-template-columns:minmax(390px,.88fr) minmax(540px,1.35fr); gap:14px; align-items:start; }
 .panel { border:1px solid var(--line); background:var(--surface); border-radius:var(--radius); overflow:hidden; }
 .execution-pane,.detail-pane { min-height:650px; height:calc(100vh - 330px); max-height:860px; }
-.panel-header { min-height:62px; padding:0 16px; border-bottom:1px solid var(--line-soft); justify-content:space-between; }
+.panel-header { min-height:62px; padding:0 16px; border-bottom:1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between; }
 .panel-header > div { gap:9px; }.panel-header h2 { font-size:14px; margin:0; letter-spacing:-.01em; }.panel-header .muted { font-family:var(--mono); }
 .toolbar { padding:12px; border-bottom:1px solid var(--line-soft); display:grid; gap:10px; }
 .filters { display:flex; gap:3px; overflow:auto; scrollbar-width:none; }.filters::-webkit-scrollbar{display:none}.filter { border:0; background:transparent; color:var(--text-3); padding:5px 8px; border-radius:6px; cursor:pointer; font-size:11px; white-space:nowrap; }.filter:hover { color:var(--text-2); background:var(--surface-2); }.filter.active { color:var(--text); background:var(--surface-3); }
 .search-wrap { height:34px; display:flex; align-items:center; gap:8px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-2); padding:0 9px; color:var(--text-3); }
-.search-wrap input { flex:1; min-width:0; border:0; outline:0; color:var(--text); background:transparent; font-size:12px; }.search-wrap input::placeholder{color:var(--text-3)} kbd { border:1px solid var(--line); background:var(--surface); border-radius:4px; padding:0 5px; font:10px/18px var(--mono); color:var(--text-3); }
+.search-icon { width:12px; height:12px; border:1px solid currentColor; border-radius:50%; position:relative; flex:0 0 auto; opacity:.75; }.search-icon:after { content:""; position:absolute; width:5px; height:1px; background:currentColor; right:-4px; bottom:-2px; transform:rotate(45deg); transform-origin:left center; }.search-wrap input { flex:1; min-width:0; border:0; outline:0; color:var(--text); background:transparent; font-size:12px; }.search-wrap input::placeholder{color:var(--text-3)} kbd { border:1px solid var(--line); background:var(--surface); border-radius:4px; padding:0 5px; font:10px/18px var(--mono); color:var(--text-3); }
 .execution-list { height:calc(100% - 147px); overflow:auto; overscroll-behavior:contain; }
 .execution-item { width:100%; display:block; text-align:left; border:0; border-bottom:1px solid var(--line-soft); background:transparent; padding:14px 15px 13px; cursor:pointer; transition:background 100ms ease; }
 .execution-item:hover { background:var(--surface-2); }.execution-item.selected { background:var(--blue-soft); box-shadow:inset 2px 0 var(--blue); }
