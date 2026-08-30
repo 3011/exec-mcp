@@ -202,6 +202,7 @@ const RUNTIME_CSS = `
   --blue: #7ba7ff;
   --blue-soft: rgba(123, 167, 255, .10);
   --radius: 14px;
+  --page-gutter: 24px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -220,7 +221,7 @@ html { min-height:100%; background: var(--bg); }
 body { min-height:100dvh; margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
 button, input { font: inherit; }
 button { color: inherit; }
-.app-shell { width:min(1540px,100%); min-height:100dvh; margin:0 auto; padding:0 28px 10px; display:flex; flex-direction:column; }
+.app-shell { width:min(1540px,100%); min-height:100dvh; margin:0 auto; padding:0 var(--page-gutter) var(--page-gutter); display:flex; flex-direction:column; }
 main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 .topbar { height: 74px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line-soft); position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(14px); }
 .brand-wrap, .top-actions, .capacity-copy, .panel-header > div, .execution-title-row, .execution-meta, .detail-title-row, .meta-line, .log-tabs { display:flex; align-items:center; }
@@ -242,7 +243,7 @@ main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 .health-pill.degraded { color:var(--red); background:var(--red-soft); border-color:color-mix(in srgb, var(--red) 24%, var(--line)); }
 .health-pill.neutral { color:var(--text-3); }
 .muted { color:var(--text-3); font-size:12px; }
-.summary-grid { margin-top:22px; display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); }
+.summary-grid { margin-top:var(--page-gutter); display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); }
 .summary-card { min-height:105px; padding:19px 20px; display:grid; grid-template-rows:auto 1fr auto; border-right:1px solid var(--line-soft); }
 .summary-card:last-child { border-right:0; }
 .summary-card > span { color:var(--text-2); font-size:12px; }.summary-card strong { font:500 30px/1 var(--mono); letter-spacing:-.04em; align-self:center; }.summary-card small { color:var(--text-3); font-size:11px; }
@@ -288,7 +289,7 @@ main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 .copy-button { border:0;background:transparent;color:var(--text-3);padding:2px 4px;cursor:pointer;font:10px/1 var(--mono); }.copy-button:hover{color:var(--text-2)}
 .hidden { display:none !important; }
 @media (max-width:1050px){main{display:block}.workspace{flex:none;min-height:0;grid-template-columns:1fr}.execution-pane{height:540px;min-height:540px}.detail-pane{height:650px;min-height:650px;max-height:650px;position:static}.execution-list{height:auto;flex:1 1 auto}}
-@media (max-width:720px){.app-shell{padding:0 14px 10px}.topbar{height:62px}.top-updated{display:none}.connection span:last-child{display:none}.health-pill{padding:6px 8px}.summary-grid{margin-top:14px;grid-template-columns:1fr 1fr}.summary-card:nth-child(2){border-right:0}.summary-card:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.summary-card{min-height:92px;padding:15px}.capacity-panel{grid-template-columns:1fr auto}.capacity-track{grid-column:1/-1;grid-row:2}.workspace{margin-top:12px}.execution-pane{height:520px;min-height:520px}.execution-list{height:373px}.task-group-meta{max-width:100px;overflow:hidden;text-overflow:ellipsis}.detail-pane{height:590px;min-height:590px;max-height:590px}.detail-summary-main{padding:14px 15px 11px}.detail-title h2{font-size:16px}.summary-metric-grid{margin:0 14px 12px;grid-template-columns:repeat(3,minmax(0,1fr))}.metric{min-height:50px;padding:8px 9px}.detail-tabs{padding:9px 14px;gap:3px}.detail-tab-panel{padding:14px}.detail-tab-panel.output-panel{padding:10px}.trace-event{grid-template-columns:70px 13px minmax(0,1fr);gap:7px}}
+@media (max-width:720px){:root{--page-gutter:14px}.app-shell{padding:0 var(--page-gutter) var(--page-gutter)}.topbar{height:62px}.top-updated{display:none}.connection span:last-child{display:none}.health-pill{padding:6px 8px}.summary-grid{margin-top:var(--page-gutter);grid-template-columns:1fr 1fr}.summary-card:nth-child(2){border-right:0}.summary-card:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.summary-card{min-height:92px;padding:15px}.capacity-panel{grid-template-columns:1fr auto}.capacity-track{grid-column:1/-1;grid-row:2}.workspace{margin-top:12px}.execution-pane{height:520px;min-height:520px}.execution-list{height:373px}.task-group-meta{max-width:100px;overflow:hidden;text-overflow:ellipsis}.detail-pane{height:590px;min-height:590px;max-height:590px}.detail-summary-main{padding:14px 15px 11px}.detail-title h2{font-size:16px}.summary-metric-grid{margin:0 14px 12px;grid-template-columns:repeat(3,minmax(0,1fr))}.metric{min-height:50px;padding:8px 9px}.detail-tabs{padding:9px 14px;gap:3px}.detail-tab-panel{padding:14px}.detail-tab-panel.output-panel{padding:10px}.trace-event{grid-template-columns:70px 13px minmax(0,1fr);gap:7px}}
 `;
 
 const RUNTIME_JS = `
@@ -660,7 +661,7 @@ const RUNTIME_JS = `
         const currentAt = Date.parse(event.at);
         const nextAt = Date.parse(next.at);
         if (Number.isFinite(currentAt) && Number.isFinite(nextAt) && nextAt >= currentAt) {
-          const delta = make('span', 'trace-delta', 'Δ ' + formatTiming(nextAt - currentAt));
+          const delta = make('span', 'trace-delta', '+' + formatTiming(nextAt - currentAt));
           delta.title = 'Elapsed time until the next lifecycle event';
           head.appendChild(delta);
         }
@@ -724,7 +725,9 @@ const RUNTIME_JS = `
   function defaultDetailTab(detail) {
     const task = detail && detail.task ? detail.task : {};
     if (issueItem(task) || task.final_state === 'unconfirmed_reaped') return 'trace';
-    return 'details';
+    const observation = detail && detail.observation ? detail.observation : {};
+    const outputBytes = Number(observation.stdout_bytes || 0) + Number(observation.stderr_bytes || 0);
+    return outputBytes > 0 ? 'output' : 'trace';
   }
 
   function setDetailTab(next) {
