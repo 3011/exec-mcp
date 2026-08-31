@@ -99,7 +99,9 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.match(script, /details-card/);
     assert.match(script, /captureDetailScroll/);
     assert.match(script, /function isNearLogBottom\(pre\)/);
-    assert.match(script, /state\.follow && !isNearLogBottom\(pre\)/);
+    assert.match(script, /const shouldFollow = isNearLogBottom\(pre\)/);
+    assert.match(script, /state\.follow = shouldFollow/);
+    assert.match(script, /state\.follow = true; state\.logScrollTop = 0/);
     assert.match(script, /runtime-follow-latest/);
     assert.match(script, /function renderAnsiText\(parent, text\)/);
     assert.match(script, /function ansiColor\(index\)/);

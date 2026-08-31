@@ -700,10 +700,11 @@ const RUNTIME_JS = `
     pre.addEventListener('scroll', () => {
       if (state.logScrollGuard) return;
       state.logScrollTop = pre.scrollTop;
-      if (state.follow && !isNearLogBottom(pre)) {
-        state.follow = false;
+      const shouldFollow = isNearLogBottom(pre);
+      if (state.follow !== shouldFollow) {
+        state.follow = shouldFollow;
         const current = byId('runtime-follow-latest');
-        if (current) current.checked = false;
+        if (current) current.checked = shouldFollow;
       }
     });
     const warning = make('div', 'log-warning hidden'); warning.id = 'runtime-log-warning';
@@ -1037,7 +1038,7 @@ const RUNTIME_JS = `
     if (selected && selected.task_handle) { state.taskExpansion[selected.task_handle] = true; saveTaskExpansion(); }
     state.selectedId = execId;
     state.selectedGeneration++;
-    state.detail = null; state.stdoutCursor = null; state.stderrCursor = null; state.stdout = ''; state.stderr = ''; state.logScrollTop = 0; state.detailScroll = { trace: 0, details: 0 };
+    state.detail = null; state.stdoutCursor = null; state.stderrCursor = null; state.stdout = ''; state.stderr = ''; state.follow = true; state.logScrollTop = 0; state.detailScroll = { trace: 0, details: 0 };
     history.replaceState(null, '', '#exec=' + encodeURIComponent(execId));
     renderExecutionList();
     els.detailEmpty.classList.remove('hidden');

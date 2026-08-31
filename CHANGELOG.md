@@ -4,6 +4,12 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-31
+
+### Fixed
+
+- Runtime Console `Follow latest` now follows terminal-style scroll intent: scrolling away from the bottom disables following, returning to the bottom re-enables it, and switching executions starts with following enabled.
+
 ## [0.7.1] - 2026-08-31
 
 ### Added
