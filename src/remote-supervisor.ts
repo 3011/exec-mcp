@@ -2,7 +2,7 @@ export const REMOTE_SUPERVISOR_PROTOCOL_VERSION = 1;
 
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
-export type RemoteSupervisorFrameType = 'O' | 'E' | 'S' | 'R' | 'X';
+export type RemoteSupervisorFrameType = 'O' | 'E' | 'S' | 'D' | 'R' | 'X';
 export type RemoteSupervisorControlType = 'C' | 'A' | 'K';
 
 export interface RemoteSupervisorConfig {
@@ -31,6 +31,15 @@ export interface RemoteSupervisorStarted {
   protocol: 1;
   pid: number;
   pgid: number;
+}
+
+export interface RemoteSupervisorDecision {
+  protocol: 1;
+  exec_id: string;
+  reason: RemoteSupervisorOutcomeReason;
+  pid: number;
+  pgid: number;
+  decision_ms: number;
 }
 
 export interface RemoteSupervisorResult {
@@ -91,7 +100,7 @@ export class RemoteSupervisorFrameDecoder {
       const typeByte = this.pending[offset];
       if (typeByte === undefined) break;
       const type = String.fromCharCode(typeByte) as RemoteSupervisorFrameType;
-      if (type !== 'O' && type !== 'E' && type !== 'S' && type !== 'R' && type !== 'X') {
+      if (type !== 'O' && type !== 'E' && type !== 'S' && type !== 'D' && type !== 'R' && type !== 'X') {
         throw new Error(`invalid remote supervisor frame type: ${typeByte}`);
       }
       const length = this.pending.readUInt32BE(offset + 1);
@@ -610,6 +619,16 @@ while reason is None:
     pump(min(0.05, max(0.0, deadline - now)))
 
 decision_monotonic = time.monotonic()
+if reason != 'exit' and not output_closed:
+    queue_json(b'D', {
+        'protocol': PROTOCOL,
+        'exec_id': exec_id,
+        'reason': reason,
+        'pid': child.pid,
+        'pgid': pgid,
+        'decision_ms': int((decision_monotonic - started_monotonic) * 1000),
+    })
+    flush_output()
 if reason == 'exit':
     cleanup_after_normal_exit()
 else:

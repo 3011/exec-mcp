@@ -21,7 +21,7 @@ A strict TypeScript Node.js gateway with no runtime npm dependencies that gives 
 - Embedded-resource export that materializes verified remote files into ChatGPT without model-authored Base64.
 - Unified Exec Job Manager with synchronous exec, asynchronous start_exec, queued admission, recent status lookup, and idempotent cancellation.
 - Incremental retained job logs with independent stdout/stderr cursors and bounded long-polling.
-- Process-group cleanup, timeout escalation, disconnect cancellation, and emergency circuit breaking.
+- One authoritative remote supervisor for process-group cleanup, command deadlines, cancellation, termination escalation, and final execution results.
 - Secret-pattern redaction for streamed output and retained tails.
 - Prometheus-compatible metrics and health endpoints.
 - Execution-capacity gauges and duration histograms for latency percentiles.
@@ -174,7 +174,7 @@ Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller
 
 ### Cancellation boundary
 
-`cancel_exec`, MCP cancellation notifications, HTTP disconnects, and timeouts request termination of the isolated remote command process group. A short secondary SSH control request writes a per-job cancellation marker under `/tmp/exec-mcp-runtime`, and the remote wrapper terminates the command PGID with SIGTERM followed by bounded SIGKILL escalation. Queued jobs can be cancelled before a process is spawned, and terminal job states are immutable. Running cancellation records `remote_exit_confirmed=true` only after the remote wrapper acknowledges cleanup; an unconfirmed remote termination finalizes as `failed` rather than claiming `cancelled`.
+Running executions use one SSH session to a remote Python supervisor. The supervisor is the authoritative owner of the command process group: it enforces the business timeout, receives cancellation requests over the same framed session, performs bounded SIGTERM-to-SIGKILL escalation, reaps the group, and returns the final execution reason. A small durable result journal is used only to recover that final fact if the primary SSH transport disappears before the result reaches exec-mcp. Queued jobs can still be cancelled before any process is spawned. If the remote final state cannot be authoritatively recovered, the execution circuit fails closed instead of claiming that termination succeeded.
 
 ## Configuration
 
@@ -245,7 +245,7 @@ npm run test:memory  # bounded-output and RSS smoke test
 npm run validate     # canonical gate: build, tests, Runtime/HTTP/SSE, and memory smoke tests
 ```
 
-Runtime source is organized by responsibility: `server.ts` for HTTP composition and lifecycle, `mcp-handler.ts` for JSON-RPC dispatch, `tool-schemas.ts` for stable schemas, `artifact-transfer.ts` for verified bidirectional file transfer, `runtime-observer.ts` for bounded execution observations/traces, `runtime-console.ts` for the read-only browser surface, and `metrics.ts` for Prometheus rendering.
+Runtime source is organized by responsibility: `server.ts` for HTTP composition and lifecycle, `mcp-handler.ts` for JSON-RPC dispatch, `exec-runner.ts` for Job Manager admission/queue/status orchestration, `remote-execution-session.ts` for one remote execution session, `remote-supervisor.ts` for the authoritative remote process lifecycle, `ssh-transport.ts` for shared SSH transport primitives, `artifact-transfer.ts` for verified bidirectional file transfer, `runtime-observer.ts` for bounded execution observations/traces, `runtime-console.ts` for the read-only browser surface, and `metrics.ts` for Prometheus rendering.
 
 CI runs the same `npm run validate` gate used for local release checks before building the container. The compiled Node test runner uses a bounded file-level concurrency of 4 to reduce timing contention in process/HTTP lifecycle tests. CodeQL and Dependabot configuration are included in the repository.
 

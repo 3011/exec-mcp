@@ -78,7 +78,7 @@ export interface ExecutionRecord {
   abortReason: AbortReason | null;
   abortSource: string | null;
   createdAt: number;
-  deadlineAt: number | null;
+  safetyReapAt: number | null;
   transportStartedAt: number | null;
   runningAt: number | null;
   abortRequestedAt: number | null;
@@ -96,7 +96,6 @@ export interface ExecutionRecord {
   transportExitConfirmed: boolean;
   remoteExitConfirmed: boolean | null;
   finalized: boolean;
-  timer: NodeJS.Timeout | null;
   emergencyTimer: NodeJS.Timeout | null;
 }
 
@@ -232,7 +231,7 @@ export class ExecRegistry {
       abortReason: null,
       abortSource: null,
       createdAt: now,
-      deadlineAt: null,
+      safetyReapAt: null,
       transportStartedAt: null,
       runningAt: null,
       abortRequestedAt: null,
@@ -250,11 +249,9 @@ export class ExecRegistry {
       transportExitConfirmed: false,
       remoteExitConfirmed: null,
       finalized: false,
-      timer: null,
       emergencyTimer: null
     };
     this.active.set(id, rec);
-    if (initialState === 'starting') this.armTimeout(rec);
     return rec;
   }
 
@@ -281,7 +278,7 @@ export class ExecRegistry {
     if (!rec || rec.finalized || rec.state !== 'starting') return false;
     rec.state = 'running';
     rec.runningAt = Date.now();
-    this.armTimeout(rec);
+    rec.safetyReapAt = rec.runningAt + rec.timeoutMs + this.reapGraceMs;
     return true;
   }
 
@@ -346,6 +343,19 @@ export class ExecRegistry {
     return true;
   }
 
+  observeRemoteAbortDecision(id: string, reason: AbortReason): boolean {
+    const rec = this.active.get(id);
+    if (!rec || rec.finalized) return false;
+    if (rec.abortReason && rec.abortReason !== reason) return false;
+    if (!rec.abortReason) {
+      rec.abortReason = reason;
+      rec.abortSource = 'remote_supervisor';
+      rec.abortRequestedAt = Date.now();
+      rec.state = ABORT_STATES[reason];
+    }
+    return true;
+  }
+
   finalize(id: string, result: FinalizeInput = {}): { finalized: boolean; record: ExecutionHistoryRecord | null } {
     const rec = this.active.get(id);
     if (!rec || rec.finalized) {
@@ -353,7 +363,6 @@ export class ExecRegistry {
       return { finalized: false, record: this.findRecent(id) || this.unconfirmed.get(id) || null };
     }
     rec.finalized = true;
-    if (rec.timer) clearTimeout(rec.timer);
     if (rec.emergencyTimer) clearTimeout(rec.emergencyTimer);
     rec.transportExitConfirmed = result.transportExitConfirmed === true;
     rec.remoteExitConfirmed = result.remoteExitConfirmed ?? null;
@@ -407,7 +416,7 @@ export class ExecRegistry {
 
   reap(now = Date.now()): void {
     for (const rec of this.active.values()) {
-      if (rec.finalized || rec.state === 'queued' || rec.deadlineAt === null || now <= rec.deadlineAt + this.reapGraceMs) continue;
+      if (rec.finalized || rec.state === 'queued' || rec.safetyReapAt === null || now <= rec.safetyReapAt) continue;
       if (rec.state !== 'killing') {
         this.requestAbort(rec.id, rec.abortReason || 'reaper_grace_exceeded', 'reaper');
         rec.state = 'killing';
@@ -460,18 +469,10 @@ export class ExecRegistry {
   close(): void {
     clearInterval(this.reaper);
     for (const rec of this.active.values()) {
-      if (rec.timer) clearTimeout(rec.timer);
       if (rec.emergencyTimer) clearTimeout(rec.emergencyTimer);
     }
   }
 
-  private armTimeout(rec: ExecutionRecord): void {
-    if (rec.timer || rec.finalized) return;
-    const now = Date.now();
-    rec.deadlineAt = now + rec.timeoutMs;
-    rec.timer = setTimeout(() => this.requestAbort(rec.id, 'request_timeout', 'timeout'), rec.timeoutMs);
-    rec.timer.unref?.();
-  }
 }
 
 function inferFinalState(rec: ExecutionRecord, result: FinalizeInput): FinalExecutionState {

@@ -4,7 +4,8 @@ import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { ExecMcpConfig } from './config.js';
-import { spawnRemoteProcess } from './exec-runner.js';
+import { spawnRemoteProcess, terminateLocalProcessGroup, waitForProcessClose } from './ssh-transport.js';
+import type { ProcessCloseResult } from './ssh-transport.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -57,10 +58,6 @@ interface RemoteReadMetadata {
   bytes: number;
 }
 
-interface ProcessCloseResult {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-}
 
 export class ArtifactTransferError extends Error {
   readonly code: string;
@@ -306,8 +303,8 @@ async function writeLocalFileToRemote(localPath: string, targetPath: string, sha
   let stderrBytes = 0;
   child.stdout.on('data', (chunk) => { if (stdoutBytes < 65536) { stdout.push(chunk); stdoutBytes += chunk.length; } });
   child.stderr.on('data', (chunk) => { if (stderrBytes < 65536) { stderr.push(chunk); stderrBytes += chunk.length; } });
-  const stop = installProcessGuards(child, config.artifactTransferTimeoutSeconds, config.killGraceSeconds, signal);
-  const close = waitForClose(child);
+  const stop = installProcessAbortGuard(child, config.killGraceSeconds, signal);
+  const close = waitForProcessClose(child);
   const pipeResult = pipeline(createReadStream(localPath), child.stdin).catch((error) => error as Error);
   const [closed, pipeError] = await Promise.all([close, pipeResult]);
   stop();
@@ -328,8 +325,8 @@ async function readRemoteFileToLocal(sourcePath: string, localPath: string, maxB
   const stderr: Buffer[] = [];
   let stderrBytes = 0;
   child.stderr.on('data', (chunk) => { if (stderrBytes < 65536) { stderr.push(chunk); stderrBytes += chunk.length; } });
-  const stop = installProcessGuards(child, config.artifactTransferTimeoutSeconds, config.killGraceSeconds, signal);
-  const close = waitForClose(child);
+  const stop = installProcessAbortGuard(child, config.killGraceSeconds, signal);
+  const close = waitForProcessClose(child);
   const handle = await open(localPath, 'wx', 0o600);
   const hash = createHash('sha256');
   let bytes = 0;
@@ -339,7 +336,7 @@ async function readRemoteFileToLocal(sourcePath: string, localPath: string, maxB
       const buffer = Buffer.from(chunk);
       bytes += buffer.length;
       if (bytes > maxBytes) {
-        terminateProcess(child, 'SIGTERM');
+        terminateLocalProcessGroup(child, 'SIGTERM');
         throw new ArtifactTransferError('file_too_large', `file_too_large: more than ${maxBytes}`);
       }
       hash.update(buffer);
@@ -360,9 +357,8 @@ async function readRemoteFileToLocal(sourcePath: string, localPath: string, maxB
   return { path: metadata.path, bytes, sha256: hash.digest('hex') };
 }
 
-function installProcessGuards(
+function installProcessAbortGuard(
   child: ReturnType<typeof spawnRemoteProcess>,
-  timeoutSeconds: number,
   killGraceSeconds: number,
   signal?: AbortSignal
 ): () => void {
@@ -371,25 +367,18 @@ function installProcessGuards(
   const requestStop = (): void => {
     if (stopping) return;
     stopping = true;
-    terminateProcess(child, 'SIGTERM');
-    forceTimer = setTimeout(() => terminateProcess(child, 'SIGKILL'), Math.max(1, killGraceSeconds) * 1000);
+    terminateLocalProcessGroup(child, 'SIGTERM');
+    forceTimer = setTimeout(() => terminateLocalProcessGroup(child, 'SIGKILL'), Math.max(1, killGraceSeconds) * 1000);
     forceTimer.unref?.();
   };
-  const timer = setTimeout(requestStop, timeoutSeconds * 1000);
-  timer.unref?.();
   const onAbort = (): void => requestStop();
   signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) requestStop();
   return () => {
-    clearTimeout(timer);
     if (forceTimer) clearTimeout(forceTimer);
     signal?.removeEventListener('abort', onAbort);
   };
 }
-
-function terminateProcess(child: ReturnType<typeof spawnRemoteProcess>, signal: NodeJS.Signals): void {
-  try { if (child.pid) process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} }
-}
-
 function createTransferGuard(requestSignal: AbortSignal | undefined, timeoutSeconds: number): {
   signal: AbortSignal;
   close: () => void;
@@ -419,12 +408,6 @@ function createTransferGuard(requestSignal: AbortSignal | undefined, timeoutSeco
   };
 }
 
-function waitForClose(child: ReturnType<typeof spawnRemoteProcess>): Promise<ProcessCloseResult> {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => resolve({ code, signal }));
-  });
-}
 
 function parseRemoteReadMetadata(chunks: Buffer[]): RemoteReadMetadata {
   const text = Buffer.concat(chunks).toString('utf8').trim();

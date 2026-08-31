@@ -22,15 +22,32 @@ test('full registry reports active age and starting state', () => {
   } finally { registry.close(); }
 });
 
-test('timeout preserves first abort reason', async () => {
+test('registry records only a safety-reap threshold and owns no business-timeout timer', async () => {
   const registry = new ExecRegistry({ maxActive: 1 });
   try {
     const rec = registry.acquire({ timeoutMs: 10 });
+    assert.equal(rec.safetyReapAt, null, 'safety threshold starts only when execution reaches running');
+    assert.equal(registry.markRunning(rec.id), true);
+    assert.equal(typeof rec.safetyReapAt, 'number');
     await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(rec.controller.signal.aborted, false, 'remote supervisor is the only business-timeout authority');
+    assert.equal(rec.abortReason, null);
+  } finally { registry.close(); }
+});
+
+test('safety reaper acts only after the remote deadline plus recovery grace', () => {
+  const registry = new ExecRegistry({ maxActive: 1, reapGraceMs: 20, emergencyReapMs: 1000 });
+  try {
+    const rec = registry.acquire({ timeoutMs: 10 });
+    assert.equal(registry.markRunning(rec.id), true);
+    const threshold = rec.safetyReapAt;
+    assert.equal(typeof threshold, 'number');
+    registry.reap(threshold - 1);
+    assert.equal(rec.controller.signal.aborted, false);
+    registry.reap(threshold + 1);
     assert.equal(rec.controller.signal.aborted, true);
-    assert.equal(rec.controller.signal.reason.message, 'request_timeout');
-    assert.equal(registry.requestAbort(rec.id, 'manual_cancel').accepted, false);
-    assert.equal(rec.abortReason, 'request_timeout');
+    assert.equal(rec.abortReason, 'reaper_grace_exceeded');
+    assert.equal(rec.state, 'killing');
   } finally { registry.close(); }
 });
 

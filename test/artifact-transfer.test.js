@@ -162,6 +162,50 @@ test('ChatGPT file references and embedded resources transfer random binary byte
   }
 });
 
+test('artifact transfer uses one deadline signal to abort a stalled download', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exec-mcp-artifact-timeout-root-'));
+  const spool = await mkdtemp(join(tmpdir(), 'exec-mcp-artifact-timeout-spool-'));
+  const source = createHttpServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write(Buffer.alloc(1024, 0x41));
+    // Deliberately leave the response open. The transfer deadline must abort it.
+  });
+  const sourceBase = await listen(source);
+  const config = parseConfig({
+    HOST: '127.0.0.1',
+    PORT: '0',
+    ALLOWED_CWDS: root,
+    DEFAULT_CWD: root,
+    ARTIFACT_MAX_BYTES: String(2 * 1024 * 1024),
+    ARTIFACT_EMBED_MAX_BYTES: String(512 * 1024),
+    ARTIFACT_SPOOL_DIR: spool,
+    ARTIFACT_IMPORT_ALLOW_HTTP: 'true',
+    ARTIFACT_IMPORT_ALLOWED_HOSTS: '127.0.0.1',
+    ARTIFACT_TRANSFER_TIMEOUT_SECONDS: '1',
+    ...remoteTestEnv()
+  });
+  const instance = createServer(config);
+  const base = await listen(instance.server);
+  const started = Date.now();
+
+  try {
+    const result = await mcpCall(base, 90, 'import_chatgpt_file', {
+      file: { download_url: `${sourceBase}/slow`, file_id: 'file_timeout' },
+      target_path: 'never-written.bin'
+    });
+    assert.equal(result.result.isError, true);
+    assert.equal(result.result.structuredContent.code, 'artifact_transfer_timeout');
+    assert.equal(Date.now() - started < 3000, true, 'single transfer deadline should abort promptly');
+    await assert.rejects(readFile(join(root, 'never-written.bin')));
+  } finally {
+    instance.runner.registry.close();
+    await new Promise((resolve) => instance.server.close(resolve));
+    await new Promise((resolve) => source.close(resolve));
+    await rm(root, { recursive: true, force: true });
+    await rm(spool, { recursive: true, force: true });
+  }
+});
+
 test('embedded-only export hard-caps at 1.45 MB and rejects the next byte', async () => {
   const root = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-root-'));
   const spool = await mkdtemp(join(tmpdir(), 'exec-mcp-embed-limit-spool-'));

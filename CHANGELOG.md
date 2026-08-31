@@ -4,6 +4,23 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-31
+
+### Changed
+
+- Remote command business deadlines now have one authority: the remote supervisor. The local registry keeps only a later safety-reap threshold for transport/recovery failure instead of running a duplicate command-timeout timer.
+- Split Job Manager orchestration from one running remote session via `RemoteExecutionSession`, and moved shared SSH spawn/termination/close primitives into `ssh-transport.ts` for both execution and artifact transfer.
+- Artifact transfers now use one end-to-end deadline signal; SSH TERM-to-KILL escalation remains a separate grace mechanism rather than a second transfer-deadline timer.
+
+### Added
+
+- Added an authoritative remote decision frame so timeout/cancellation lifecycle state can become visible before final process-group cleanup completes, without reintroducing a local timeout authority.
+- Added regression coverage for live remote timeout decisions, local safety-reap timing, and single-deadline artifact-transfer cancellation.
+
+### Documentation
+
+- Updated the architecture and cancellation documentation to match the single-supervisor, single-session execution model and result-journal recovery path.
+
 ## [0.8.0] - 2026-08-31
 
 ### Changed

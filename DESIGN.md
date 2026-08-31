@@ -13,11 +13,15 @@ trusted MCP or HTTP client
         |
         | authenticated/private transport supplied by operator
         v
-exec-mcp HTTP service
+exec-mcp HTTP service / Job Manager
         |
-        | dedicated SSH identity + pinned host key
+        | one SSH session per running execution
         v
-remote non-interactive /bin/sh
+remote Python supervisor
+        |
+        | isolated process group
+        v
+non-interactive /bin/sh -c command
 ```
 
 The implementation is written in strict TypeScript, compiles to JavaScript for Node.js, and uses Node.js core modules only at runtime. Runtime state is in memory and is lost on restart.
@@ -26,8 +30,14 @@ The source is split by responsibility without adding runtime frameworks:
 
 - `server.ts` composes dependencies and owns HTTP/SSE startup, routing, and shutdown;
 - `mcp-handler.ts` owns MCP request tracking and JSON-RPC method dispatch;
+- `exec-runner.ts` owns validation, queue/admission, Job Manager orchestration, retained status, and shutdown;
+- `remote-execution-session.ts` owns one running execution session and bridges Job Manager state to the remote supervisor protocol;
+- `remote-supervisor.ts` defines the remote Python supervisor and framed control/output/result protocol;
+- `ssh-transport.ts` owns the shared SSH spawn, local transport process-group termination, and close primitives used by execution and artifact transfer;
+- `exec-registry.ts` owns bounded lifecycle records, terminal history, and the fail-safe circuit;
 - `tool-schemas.ts` contains the stable MCP tool schema objects;
 - `artifact-transfer.ts` owns ChatGPT file references, binary SSH transfer, SHA-256 verification, atomic commits, and short-lived export resources;
+- `runtime-observer.ts` owns bounded lifecycle observations and trace metadata;
 - `metrics.ts` renders Prometheus text from the existing runner and registry state.
 
 `server.ts` is the composition root. Lower-level modules do not import initialized server state or import `server.ts`.
@@ -101,12 +111,13 @@ Lifecycle steps:
 2. Resolve the remote working directory and verify its real path remains inside `ALLOWED_CWDS`.
 3. Register the Job Manager record in `queued` state.
 4. Admit the job only when its sync/async class limit and the global running limit both permit it. Queued jobs do not consume a running slot.
-5. Enter `running`, arm the runtime timeout, spawn the local SSH transport, and start the user command in an isolated remote process group.
-6. Drain stdout and stderr continuously. Synchronous forwarding remains bounded; Job Manager logs are retained in separate bounded buffers.
-7. React to normal exit, runtime timeout, HTTP disconnect, MCP cancellation, `cancel_exec`, or service shutdown.
-8. Finalize exactly once into an immutable terminal state, release running capacity, and retain sanitized bounded history.
+5. Enter `running`, record a later local safety-reap threshold for recovery, start one SSH transport, and launch the remote Python supervisor. The supervisor starts the user command in an isolated process group and is the only authority that enforces the requested business timeout.
+6. Exchange framed control, stdout, stderr, start metadata, and the authoritative final result over that same SSH session. Output forwarding and retained logs remain bounded, while remote control remains responsive under output backpressure.
+7. React to normal exit, remote timeout, HTTP disconnect, MCP cancellation, `cancel_exec`, service shutdown, or transport loss. Cancellation requests travel to the supervisor on the existing session; the supervisor owns SIGTERM-to-SIGKILL escalation and reaping.
+8. Persist the supervisor's final result to a small secret-free remote journal before sending it. The normal path ACKs and removes the journal; if the primary transport is lost, exec-mcp performs bounded reconciliation to recover the same authoritative fact.
+9. Finalize exactly once into an immutable terminal state, release running capacity, and retain sanitized bounded history.
 
-Terminal states never transition again. Cancelling a queued job terminalizes it without spawning a process. Cancelling a running job writes a per-job remote cancellation marker over a secondary bounded SSH control request; the remote wrapper terminates the command PGID with SIGTERM followed by bounded SIGKILL escalation and acknowledges cleanup before `remote_exit_confirmed=true`. If remote cleanup cannot be confirmed, the job finalizes as failed instead of claiming cancellation succeeded.
+Terminal states never transition again. Cancelling a queued job terminalizes it without spawning a process. `remote_exit_confirmed=true` is recorded only from a supervisor result or recovered result journal. If neither can prove the remote final state, the execution fails as unconfirmed and the circuit blocks new work rather than treating a local SSH close as proof of remote termination.
 
 ## Bounds
 
@@ -153,17 +164,19 @@ Trace events are metadata-only and bounded. They intentionally avoid raw request
 
 ## Circuit breaker
 
-A reaper first requests cancellation for overdue records. If the local SSH transport still does not confirm exit after the emergency grace window, the registry may force-finalize the stale record and open the execution circuit.
+The remote supervisor owns the requested command deadline. The local registry records that deadline only as a safety/recovery reference. If an execution remains unresolved beyond the remote deadline plus the reaper grace period, the local reaper requests supervisor termination and eventually releases a stale local slot only under an explicit unconfirmed terminal record.
+
+If the primary SSH transport closes without an authoritative result, the execution is quarantined immediately while bounded result-journal reconciliation runs. Any terminal record with `remote_exit_confirmed=false` keeps the execution circuit open.
 
 While the circuit is open:
 
 - new `exec` and `start_exec` calls are rejected;
 - control-plane tools remain available;
-- the diagnostic is retained even if normal history entries are evicted;
-- a late confirmed transport close may clear the circuit;
+- the unresolved diagnostic is retained even if normal history entries are evicted;
+- a later authoritative remote confirmation can clear the circuit;
 - an operator may deliberately restart the service after investigation.
 
-This avoids claiming safe capacity while an execution has an unresolved local transport lifecycle.
+This avoids claiming safe capacity when the service cannot prove the remote process lifecycle. A local SSH transport close by itself is never treated as remote-exit proof.
 
 ## File transfer
 
@@ -219,4 +232,4 @@ npm run build
 npm run validate
 ```
 
-The current suite contains 58 passing tests, including random-binary bidirectional artifact transfer, idempotent retry, checksum failure, HEAD, and byte-range coverage.
+The validation suite covers execution lifecycle races, remote timeout/cancellation, transport-loss reconciliation, bounded output, Runtime/HTTP/MCP contracts, and random-binary bidirectional artifact transfer.

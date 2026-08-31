@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { parseConfig } from '../dist/src/config.js';
-import { ExecRunner, spawnRemoteProcess } from '../dist/src/exec-runner.js';
+import { ExecRunner } from '../dist/src/exec-runner.js';
+import { spawnRemoteProcess } from '../dist/src/ssh-transport.js';
 import { remoteTestEnv } from '../scripts/helpers.js';
 import {
   REMOTE_SUPERVISOR_PROTOCOL_VERSION,
@@ -246,11 +247,48 @@ test('manual cancel prevents a detached background marker from firing after tran
     assert.equal(final.found, true);
     assert.equal(final.task.status, 'cancelled');
     assert.equal(final.task.remote_exit_confirmed, true);
+    assert.equal(final.task.abort_source, 'manual_tool');
     await new Promise((resolve) => setTimeout(resolve, 2300));
     assert.equal(existsSync(marker), false, 'cancelled remote process group must not create marker later');
   } finally {
     runner.close();
     await rm(marker, { force: true });
+  }
+});
+
+test('remote supervisor decision updates live timeout state before termination finishes', async () => {
+  const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '4', KILL_GRACE_SECONDS: '2' });
+  try {
+    const started = runner.start({
+      command: `python3 -c "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10)"`,
+      cwd: '/tmp',
+      timeout_seconds: 1,
+      label: 'authoritative-timeout-decision'
+    });
+    let observed = null;
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline) {
+      const status = await runner.getStatus(started.exec_id);
+      if (status.found && status.source === 'active' && status.task.state === 'timeout_aborting') {
+        observed = status;
+        break;
+      }
+      if (status.found && status.source !== 'active') break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(observed, 'authoritative D frame should expose timeout_aborting before SIGKILL/final result');
+    assert.equal(observed.task.abort_reason, 'request_timeout');
+    assert.equal(observed.task.remote_exit_confirmed, null);
+    const observation = runner.runtimeObserver.get(started.exec_id);
+    assert.equal(observation.trace.some((event) => event.event === 'remote_termination_decided' && /request_timeout/.test(event.detail || '')), true);
+
+    const final = await runner.getStatus(started.exec_id, { waitSeconds: 4 });
+    assert.equal(final.found, true);
+    assert.equal(final.task.status, 'timed_out');
+    assert.equal(final.task.remote_exit_confirmed, true);
+    assert.equal(final.task.abort_source, 'remote_supervisor');
+  } finally {
+    runner.close();
   }
 });
 

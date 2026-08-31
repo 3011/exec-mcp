@@ -31,7 +31,6 @@ export interface ExecMcpConfig {
   artifactImportAllowHttp: boolean;
   artifactImportAllowedHosts: string[];
   ringBufferBytes: number;
-  maxConcurrentExecs: number;
   syncMaxConcurrentExecs: number;
   asyncMaxConcurrentExecs: number;
   globalMaxConcurrentExecs: number;
@@ -58,7 +57,7 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     .map((value) => value.trim())
     .filter(Boolean);
 
-  const legacyMaxConcurrentExecs = positiveInt(env.MAX_CONCURRENT_EXECS, 2);
+  const defaultConcurrentExecs = positiveInt(env.MAX_CONCURRENT_EXECS, 2);
 
   return {
     host: env.HOST || '0.0.0.0',
@@ -79,10 +78,9 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): ExecMcpConfig
     artifactImportAllowHttp: String(env.ARTIFACT_IMPORT_ALLOW_HTTP || 'false').toLowerCase() === 'true',
     artifactImportAllowedHosts: splitCsv(env.ARTIFACT_IMPORT_ALLOWED_HOSTS || ''),
     ringBufferBytes: positiveInt(env.RING_BUFFER_BYTES, 65536),
-    maxConcurrentExecs: legacyMaxConcurrentExecs,
-    syncMaxConcurrentExecs: positiveInt(env.SYNC_MAX_CONCURRENT_EXECS, legacyMaxConcurrentExecs),
-    asyncMaxConcurrentExecs: positiveInt(env.ASYNC_MAX_CONCURRENT_EXECS, legacyMaxConcurrentExecs),
-    globalMaxConcurrentExecs: positiveInt(env.GLOBAL_MAX_CONCURRENT_EXECS, legacyMaxConcurrentExecs),
+    syncMaxConcurrentExecs: positiveInt(env.SYNC_MAX_CONCURRENT_EXECS, defaultConcurrentExecs),
+    asyncMaxConcurrentExecs: positiveInt(env.ASYNC_MAX_CONCURRENT_EXECS, defaultConcurrentExecs),
+    globalMaxConcurrentExecs: positiveInt(env.GLOBAL_MAX_CONCURRENT_EXECS, defaultConcurrentExecs),
     maxQueuedExecs: positiveInt(env.MAX_QUEUED_EXECS, 20),
     jobLogBytes: positiveInt(env.JOB_LOG_BYTES, 1024 * 1024),
     jobRetentionSeconds: positiveInt(env.JOB_RETENTION_SECONDS, 3600),
