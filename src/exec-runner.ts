@@ -714,8 +714,12 @@ export class ExecRunner {
       health: this.registry.circuitOpen ? 'degraded' : 'healthy',
       circuit_open: this.registry.circuitOpen,
       counts: {
+        active: active.active,
         running: active.active,
         queued: active.queued,
+        completed: this.metrics.finishedTotal.get('completed') || 0,
+        issues: ['failed', 'timed_out', 'spawn_failed', 'unconfirmed_reaped']
+          .reduce((sum, state) => sum + (this.metrics.finishedTotal.get(state as FinalExecutionState) || 0), 0),
         recent_completed: recent.filter((item) => item.status === 'completed').length,
         recent_failed: recent.filter((item) => item.status === 'failed' || item.status === 'timed_out').length
       },

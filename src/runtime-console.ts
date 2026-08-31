@@ -121,10 +121,10 @@ const RUNTIME_HTML = `<!doctype html>
 
     <main>
       <section id="summary" class="summary-grid" aria-label="Runtime summary">
-        <article class="summary-card"><span>Running</span><strong id="count-running">—</strong><small id="cap-running">—</small></article>
+        <article class="summary-card"><span>Active</span><strong id="count-running">—</strong><small id="cap-running">—</small></article>
         <article class="summary-card"><span>Queued</span><strong id="count-queued">—</strong><small id="cap-queued">—</small></article>
-        <article class="summary-card"><span>Completed</span><strong id="count-completed">—</strong><small>recent window</small></article>
-        <article class="summary-card"><span>Issues</span><strong id="count-failed">—</strong><small>failed · timeout</small></article>
+        <article class="summary-card"><span>Completed</span><strong id="count-completed">—</strong><small>since restart</small></article>
+        <article class="summary-card"><span>Issues</span><strong id="count-failed">—</strong><small>since restart</small></article>
       </section>
 
       <section class="capacity-panel">
@@ -480,10 +480,10 @@ const RUNTIME_JS = `
   function renderSummary() {
     const overview = state.overview;
     if (!overview) return;
-    els.running.textContent = overview.counts.running;
+    els.running.textContent = overview.counts.active ?? overview.counts.running;
     els.queued.textContent = overview.counts.queued;
-    els.completed.textContent = overview.counts.recent_completed;
-    els.failed.textContent = overview.counts.recent_failed;
+    els.completed.textContent = overview.counts.completed ?? overview.counts.recent_completed;
+    els.failed.textContent = overview.counts.issues ?? overview.counts.recent_failed;
     els.capRunning.textContent = overview.capacity.running + ' / ' + overview.capacity.global_max + ' slots';
     els.capQueued.textContent = overview.capacity.queued + ' / ' + overview.capacity.queue_max + ' queue';
     els.capacityCopy.textContent = overview.capacity.running + ' / ' + overview.capacity.global_max;

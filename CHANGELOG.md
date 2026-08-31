@@ -13,6 +13,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 ### Fixed
 
 - Manual scrolling away from the bottom of retained output now disables `Follow latest` and preserves the user's scroll position across automatic Runtime refreshes instead of snapping back to the newest line.
+- Runtime summary cards now use exact current slot/queue counts and since-restart terminal totals instead of presenting a fixed 20-entry recent-history window as cumulative results.
 
 ## [0.7.0] - 2026-08-30
 

@@ -65,6 +65,8 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.match(body, /Runtime Console/);
     assert.match(body, /Read only/);
     assert.match(body, /<h2>Tasks<\/h2>/);
+    assert.match(body, /<span>Active<\/span>/);
+    assert.match(body, /<small>since restart<\/small>/);
     assert.doesNotMatch(body, /LIVE OBSERVABILITY|What is running right now\?|Read-only visibility into task contexts/);
 
     const css = await fetch(`${base}/runtime/assets/app.css`);
@@ -183,14 +185,27 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
   }, { EXPOSE_REDACTED_COMMAND_PREVIEW: 'true' });
 });
 
-test('Runtime overview is observation-only and leaves existing MCP and metrics surfaces independent', async () => {
-  await withServer(async (base) => {
+test('Runtime overview uses exact current capacity and since-restart terminal totals', async () => {
+  await withServer(async (base, instance) => {
+    instance.runner.metrics.finishedTotal.set('completed', 23);
+    instance.runner.metrics.finishedTotal.set('failed', 2);
+    instance.runner.metrics.finishedTotal.set('timed_out', 1);
+    instance.runner.metrics.finishedTotal.set('spawn_failed', 3);
+    instance.runner.metrics.finishedTotal.set('unconfirmed_reaped', 1);
+    instance.runner.metrics.finishedTotal.set('cancelled', 7);
+    instance.runner.metrics.finishedTotal.set('client_closed', 5);
+
     const overview = await fetch(`${base}/runtime/api/overview`);
     assert.equal(overview.status, 200);
     const data = await overview.json();
     assert.equal(data.health, 'healthy');
-    assert.equal(data.counts.running, 0);
+    assert.equal(data.counts.active, 0);
+    assert.equal(data.counts.running, 0, 'legacy running alias remains compatible');
     assert.equal(data.counts.queued, 0);
+    assert.equal(data.counts.completed, 23);
+    assert.equal(data.counts.issues, 7, 'cancelled and client_closed are not issues');
+    assert.equal(data.counts.recent_completed, 0, 'legacy recent-window fields remain available');
+    assert.equal(data.counts.recent_failed, 0);
     assert.equal(typeof data.version, 'string');
 
     const metrics = await fetch(`${base}/metrics`);
