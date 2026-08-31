@@ -4,6 +4,12 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-08-31
+
+### Fixed
+
+- Remote timeout and cancellation watchers now coordinate normal completion through a control-file stop signal instead of a racy one-shot process signal, preventing completed commands from being held open until their timeout and falsely reported as timed out or remotely unconfirmed.
+
 ## [0.7.2] - 2026-08-31
 
 ### Fixed
