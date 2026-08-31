@@ -32,8 +32,17 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Validate
-        run: npm run validate
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm run test:compiled
+
+      - name: Runtime smoke
+        run: bash scripts/runtime-smoke.sh
+
+      - name: Memory smoke
+        run: bash scripts/memory-smoke.sh
 
   docker:
     name: Docker image
