@@ -285,7 +285,7 @@ main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 .details-card { border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:var(--surface); }.details-command { padding:11px 12px 12px; background:var(--surface-2); }.details-command .meta-key { display:block; width:auto; margin-bottom:7px; }.details-command code { display:block; color:var(--text-2); font:11px/1.5 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }.details-card .meta-line { min-height:38px; padding:8px 12px; border-top:1px solid var(--line-soft); background:var(--surface); }
 .meta-stack { display:grid; }.meta-line { min-width:0; gap:10px; }.meta-key { color:var(--text-3); width:92px; flex:0 0 92px; font-size:11px; }.meta-value { color:var(--text-2); font:11px/1.4 var(--mono); min-width:0; overflow-wrap:anywhere; }.meta-value.command { width:100%; }
 .trace { position:relative; display:grid; gap:0; }.trace-event { display:grid; grid-template-columns:86px 14px minmax(0,1fr); gap:9px; min-height:42px; }.trace-copy-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.trace-delta{color:var(--text-3);font:9px/1.3 var(--mono);white-space:nowrap}.trace-time { color:var(--text-3); font:10px/18px var(--mono); text-align:right; padding-top:1px; }.trace-rail { position:relative; display:flex; justify-content:center; }.trace-rail:before { content:""; position:absolute; top:12px; bottom:-12px; width:1px; background:var(--line); }.trace-event:last-child .trace-rail:before { display:none; }.trace-dot { width:7px;height:7px;border-radius:50%;background:var(--text-3);margin-top:6px;z-index:1;box-shadow:0 0 0 3px var(--surface); }.trace-event.info .trace-dot{background:var(--green)}.trace-event.warning .trace-dot{background:var(--amber)}.trace-event.error .trace-dot{background:var(--red)}.trace-copy strong { display:block; font-size:11px; font-weight:580; line-height:18px; }.trace-copy span { color:var(--text-3); font:10px/1.4 var(--mono); display:block; overflow-wrap:anywhere; }
-.log-shell { height:100%; min-height:0; border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:#08090b; color:#d8dee8; display:flex; flex-direction:column; }.log-head { min-height:38px; padding:0 10px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #1f2329; background:#0d0f12; }.log-tabs{gap:2px}.log-tab { border:0; background:transparent; color:#7d8795; padding:5px 8px; border-radius:5px; cursor:pointer; font-size:10px; }.log-tab.active{color:#e7ebf0;background:#181b20}.follow-toggle { display:flex; gap:6px; align-items:center; color:#7d8795; font-size:10px; cursor:pointer; user-select:none; }.follow-toggle input{accent-color:#59d49b}.log-output { margin:0; flex:1 1 auto; min-height:0; overflow:auto; padding:12px 13px 18px; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.55 var(--mono); tab-size:2; }.log-empty { color:#69717d; }.log-warning { color:var(--amber); font:10px/1.4 var(--mono); padding:8px 10px; border-top:1px solid #1f2329; background:#0d0f12; }
+.log-shell { height:100%; min-height:0; border:1px solid var(--line-soft); border-radius:9px; overflow:hidden; background:#08090b; color:#d8dee8; display:flex; flex-direction:column; }.log-head { min-height:38px; padding:0 10px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #1f2329; background:#0d0f12; }.log-tabs{gap:2px}.log-tab { border:0; background:transparent; color:#7d8795; padding:5px 8px; border-radius:5px; cursor:pointer; font-size:10px; }.log-tab.active{color:#e7ebf0;background:#181b20}.follow-toggle { display:flex; gap:6px; align-items:center; color:#7d8795; font-size:10px; cursor:pointer; user-select:none; }.follow-toggle input{accent-color:#59d49b}.log-output { margin:0; flex:1 1 auto; min-height:0; overflow:auto; padding:12px 13px 18px; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.55 var(--mono); tab-size:2; }.log-output .ansi-bold{font-weight:700}.log-output .ansi-dim{opacity:.68}.log-output .ansi-italic{font-style:italic}.log-output .ansi-underline{text-decoration:underline}.log-output .ansi-strike{text-decoration:line-through}.log-empty { color:#69717d; }.log-warning { color:var(--amber); font:10px/1.4 var(--mono); padding:8px 10px; border-top:1px solid #1f2329; background:#0d0f12; }
 .copy-button { border:0;background:transparent;color:var(--text-3);padding:2px 4px;cursor:pointer;font:10px/1 var(--mono); }.copy-button:hover{color:var(--text-2)}
 .hidden { display:none !important; }
 @media (max-width:1050px){.app-shell{height:auto;min-height:100dvh;overflow:visible}main{display:block}.workspace{flex:none;min-height:0;grid-template-columns:1fr}.execution-pane{height:540px;min-height:540px}.detail-pane{height:650px;min-height:650px;max-height:650px;position:static}.execution-list{height:auto;flex:1 1 auto}}
@@ -314,6 +314,7 @@ const RUNTIME_JS = `
     logTab: 'stdout',
     follow: true,
     logScrollTop: 0,
+    logScrollGuard: 0,
     detailTab: null,
     detailScroll: { trace: 0, details: 0 },
     lastSuccessAt: 0,
@@ -685,17 +686,134 @@ const RUNTIME_JS = `
       tabs.appendChild(tab);
     }
     const follow = make('label', 'follow-toggle');
-    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = state.follow;
-    checkbox.addEventListener('change', () => { state.follow = checkbox.checked; if (state.follow) scrollLogToBottom(); });
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = 'runtime-follow-latest'; checkbox.checked = state.follow;
+    checkbox.addEventListener('change', () => {
+      state.follow = checkbox.checked;
+      const pre = byId('runtime-log-output');
+      if (pre) state.logScrollTop = pre.scrollTop;
+      if (state.follow) scrollLogToBottom();
+    });
     append(follow, checkbox, make('span', '', 'Follow latest'));
     append(head, tabs, follow);
 
     const pre = make('pre', 'log-output'); pre.id = 'runtime-log-output';
-    pre.addEventListener('scroll', () => { if (!state.follow) state.logScrollTop = pre.scrollTop; });
+    pre.addEventListener('scroll', () => {
+      if (state.logScrollGuard) return;
+      state.logScrollTop = pre.scrollTop;
+      if (state.follow && !isNearLogBottom(pre)) {
+        state.follow = false;
+        const current = byId('runtime-follow-latest');
+        if (current) current.checked = false;
+      }
+    });
     const warning = make('div', 'log-warning hidden'); warning.id = 'runtime-log-warning';
     append(shell, head, pre, warning);
     queueMicrotask(renderLogBody);
     return shell;
+  }
+
+  function isNearLogBottom(pre) {
+    return pre.scrollHeight - pre.scrollTop - pre.clientHeight <= 24;
+  }
+
+  function withLogScrollGuard(action) {
+    const token = ++state.logScrollGuard;
+    action();
+    requestAnimationFrame(() => { if (state.logScrollGuard === token) state.logScrollGuard = 0; });
+  }
+
+  function ansiColor(index) {
+    const palette = ['#000000','#cd3131','#0dbc79','#e5e510','#2472c8','#bc3fbc','#11a8cd','#e5e5e5','#666666','#f14c4c','#23d18b','#f5f543','#3b8eea','#d670d6','#29b8db','#ffffff'];
+    if (index >= 0 && index < 16) return palette[index];
+    if (index >= 16 && index <= 231) {
+      const value = index - 16;
+      const levels = [0, 95, 135, 175, 215, 255];
+      const r = levels[Math.floor(value / 36) % 6];
+      const g = levels[Math.floor(value / 6) % 6];
+      const b = levels[value % 6];
+      return 'rgb(' + r + ',' + g + ',' + b + ')';
+    }
+    if (index >= 232 && index <= 255) {
+      const gray = 8 + (index - 232) * 10;
+      return 'rgb(' + gray + ',' + gray + ',' + gray + ')';
+    }
+    return null;
+  }
+
+  function resetAnsiState() {
+    return { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false, strike: false, inverse: false };
+  }
+
+  function applyAnsiCodes(style, codes) {
+    if (!codes.length) codes = [0];
+    for (let index = 0; index < codes.length; index++) {
+      const code = Number.isFinite(codes[index]) ? codes[index] : 0;
+      if (code === 0) Object.assign(style, resetAnsiState());
+      else if (code === 1) style.bold = true;
+      else if (code === 2) style.dim = true;
+      else if (code === 3) style.italic = true;
+      else if (code === 4) style.underline = true;
+      else if (code === 7) style.inverse = true;
+      else if (code === 9) style.strike = true;
+      else if (code === 22) { style.bold = false; style.dim = false; }
+      else if (code === 23) style.italic = false;
+      else if (code === 24) style.underline = false;
+      else if (code === 27) style.inverse = false;
+      else if (code === 29) style.strike = false;
+      else if (code >= 30 && code <= 37) style.fg = ansiColor(code - 30);
+      else if (code === 39) style.fg = null;
+      else if (code >= 40 && code <= 47) style.bg = ansiColor(code - 40);
+      else if (code === 49) style.bg = null;
+      else if (code >= 90 && code <= 97) style.fg = ansiColor(8 + code - 90);
+      else if (code >= 100 && code <= 107) style.bg = ansiColor(8 + code - 100);
+      else if ((code === 38 || code === 48) && codes[index + 1] === 5 && Number.isFinite(codes[index + 2])) {
+        const color = ansiColor(codes[index + 2]);
+        if (code === 38) style.fg = color; else style.bg = color;
+        index += 2;
+      } else if ((code === 38 || code === 48) && codes[index + 1] === 2 && [codes[index + 2], codes[index + 3], codes[index + 4]].every(Number.isFinite)) {
+        const rgb = codes.slice(index + 2, index + 5).map((value) => Math.max(0, Math.min(255, value)));
+        const color = 'rgb(' + rgb.join(',') + ')';
+        if (code === 38) style.fg = color; else style.bg = color;
+        index += 4;
+      }
+    }
+  }
+
+  function appendAnsiText(parent, text, style) {
+    if (!text) return;
+    const span = make('span');
+    span.textContent = text;
+    if (style.bold) span.classList.add('ansi-bold');
+    if (style.dim) span.classList.add('ansi-dim');
+    if (style.italic) span.classList.add('ansi-italic');
+    if (style.underline) span.classList.add('ansi-underline');
+    if (style.strike) span.classList.add('ansi-strike');
+    let fg = style.fg;
+    let bg = style.bg;
+    if (style.inverse) { const swap = fg; fg = bg || '#d8dee8'; bg = swap || '#08090b'; }
+    if (fg) span.style.color = fg;
+    if (bg) span.style.backgroundColor = bg;
+    parent.appendChild(span);
+  }
+
+  function renderAnsiText(parent, text) {
+    const esc = String.fromCharCode(27);
+    if (!text.includes(esc + '[')) { parent.textContent = text; return; }
+    parent.replaceChildren();
+    const style = resetAnsiState();
+    let offset = 0;
+    while (offset < text.length) {
+      const start = text.indexOf(esc + '[', offset);
+      if (start < 0) { appendAnsiText(parent, text.slice(offset), style); break; }
+      appendAnsiText(parent, text.slice(offset, start), style);
+      const end = text.indexOf('m', start + 2);
+      if (end < 0) { appendAnsiText(parent, text.slice(start), style); break; }
+      const body = text.slice(start + 2, end);
+      if (!/^[0-9;]*$/.test(body)) { appendAnsiText(parent, text.slice(start, end + 1), style); offset = end + 1; continue; }
+      const codes = body === '' ? [0] : body.split(';').map((value) => value === '' ? 0 : Number(value));
+      applyAnsiCodes(style, codes);
+      offset = end + 1;
+    }
   }
 
   function renderLogBody() {
@@ -703,17 +821,25 @@ const RUNTIME_JS = `
     const warning = byId('runtime-log-warning');
     if (!pre || !warning) return;
     const text = state.logTab === 'stderr' ? state.stderr : state.stdout;
-    pre.textContent = text || (state.detail && state.detail.logs && !state.detail.logs.available ? 'Retained logs are no longer available for this execution.' : 'No ' + state.logTab + ' output yet.');
-    pre.classList.toggle('log-empty', !text);
+    const display = text || (state.detail && state.detail.logs && !state.detail.logs.available ? 'Retained logs are no longer available for this execution.' : 'No ' + state.logTab + ' output yet.');
+    withLogScrollGuard(() => {
+      renderAnsiText(pre, display);
+      pre.classList.toggle('log-empty', !text);
+      if (state.follow) pre.scrollTop = pre.scrollHeight;
+      else pre.scrollTop = Math.min(state.logScrollTop, Math.max(0, pre.scrollHeight - pre.clientHeight));
+    });
     const truncated = state.detail && state.detail.logs && (state.logTab === 'stderr' ? state.detail.logs.stderr_truncated : state.detail.logs.stdout_truncated);
     warning.classList.toggle('hidden', !truncated);
     warning.textContent = truncated ? 'Older ' + state.logTab + ' output was evicted from the bounded runtime log buffer.' : '';
-    if (state.follow) scrollLogToBottom(); else pre.scrollTop = state.logScrollTop;
   }
 
   function scrollLogToBottom() {
     const pre = byId('runtime-log-output');
-    if (pre) pre.scrollTop = pre.scrollHeight;
+    if (!pre) return;
+    withLogScrollGuard(() => {
+      pre.scrollTop = pre.scrollHeight;
+      state.logScrollTop = pre.scrollTop;
+    });
   }
 
   function captureDetailScroll() {

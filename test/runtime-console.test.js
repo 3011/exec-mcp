@@ -96,6 +96,12 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.match(script, /summary-metric-grid/);
     assert.match(script, /details-card/);
     assert.match(script, /captureDetailScroll/);
+    assert.match(script, /function isNearLogBottom\(pre\)/);
+    assert.match(script, /state\.follow && !isNearLogBottom\(pre\)/);
+    assert.match(script, /runtime-follow-latest/);
+    assert.match(script, /function renderAnsiText\(parent, text\)/);
+    assert.match(script, /function ansiColor\(index\)/);
+    assert.match(script, /ansi-bold/);
 
     const denied = await fetch(`${base}/runtime/api/overview`, { method: 'POST' });
     assert.equal(denied.status, 405);

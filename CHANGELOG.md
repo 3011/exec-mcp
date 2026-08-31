@@ -4,15 +4,15 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-31
+
 ### Added
 
-- Added lightweight query-time execution timings (`queue_ms`, `transport_startup_ms`, `time_to_first_output_ms`, `runtime_ms`, `termination_ms`, and `total_ms`) to Runtime views and `get_exec_status`.
-- Added deterministic diagnostic fields for coarse lifecycle phase, activity state, conservative failure phase, and last activity/output age.
+- Runtime Console retained output now renders ANSI SGR color and emphasis safely in the browser without using `innerHTML` or changing retained log data.
 
-### Changed
+### Fixed
 
-- Runtime Console execution details now show the derived stage timings without adding a telemetry backend or persistent diagnostic state.
-- Diagnostic labels remain evidence-based: quiet output is not treated as a hang, and local transport launch is not treated as proof of SSH handshake or remote process startup.
+- Manual scrolling away from the bottom of retained output now disables `Follow latest` and preserves the user's scroll position across automatic Runtime refreshes instead of snapping back to the newest line.
 
 ## [0.7.0] - 2026-08-30
 
@@ -21,12 +21,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - Added the dependency-free, read-only Runtime Console at `/runtime` with live execution state, retained stdout/stderr, activity/output timestamps, bounded lifecycle traces, responsive dark/light UI, and task-aware execution grouping.
 - Added `begin_task`, which mints a server-issued opaque `task_handle` for explicit cross-call task/conversation correlation.
 - Added task context metadata to active executions, recent history, synchronous/asynchronous execution results, Runtime observations, and Runtime detail views.
+- Added lightweight query-time execution timings (`queue_ms`, `transport_startup_ms`, `time_to_first_output_ms`, `runtime_ms`, `termination_ms`, and `total_ms`) to Runtime views and `get_exec_status`.
+- Added deterministic diagnostic fields for coarse lifecycle phase, activity state, conservative failure phase, and last activity/output age.
 
 ### Changed
 
 - MCP `exec` and `start_exec` now require the exact `task_handle` returned by `begin_task`; unknown or forged handles are rejected instead of silently accepted.
 - Runtime Console now groups executions by explicit Task Context rather than attempting to infer ChatGPT conversations from MCP transport sessions.
 - Tool descriptions explicitly instruct agents to call `begin_task` once for a new ChatGPT conversation or logical task and reuse the handle for subsequent execution calls.
+- Runtime Console execution details now show the derived stage timings without adding a telemetry backend or persistent diagnostic state.
+- Diagnostic labels remain evidence-based: quiet output is not treated as a hang, and local transport launch is not treated as proof of SSH handshake or remote process startup.
 
 ### Security
 
