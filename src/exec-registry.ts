@@ -212,7 +212,10 @@ export class ExecRegistry {
   get activeCount(): number { return this.active.size; }
   get queuedCount(): number { return [...this.active.values()].filter((rec) => rec.state === 'queued').length; }
   get slotCount(): number { return [...this.active.values()].filter((rec) => rec.state !== 'queued').length; }
-  get circuitOpen(): boolean { return this.unconfirmed.size > 0; }
+  get unconfirmedCount(): number {
+    return this.unconfirmed.size + [...this.active.values()].filter((rec) => rec.remoteExitConfirmed === false).length;
+  }
+  get circuitOpen(): boolean { return this.unconfirmedCount > 0; }
 
   register({ timeoutMs, metadata = {}, initialState = 'queued' }: { timeoutMs: number; metadata?: ExecutionMetadata; initialState?: 'queued' | 'starting' }): ExecutionRecord {
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive integer');
@@ -328,6 +331,21 @@ export class ExecRegistry {
     return true;
   }
 
+  markRemoteUnconfirmed(id: string): boolean {
+    const rec = this.active.get(id);
+    if (!rec || rec.finalized) return false;
+    rec.remoteExitConfirmed = false;
+    rec.state = 'killing';
+    return true;
+  }
+
+  markRemoteConfirmed(id: string): boolean {
+    const rec = this.active.get(id);
+    if (!rec || rec.finalized) return false;
+    rec.remoteExitConfirmed = true;
+    return true;
+  }
+
   finalize(id: string, result: FinalizeInput = {}): { finalized: boolean; record: ExecutionHistoryRecord | null } {
     const rec = this.active.get(id);
     if (!rec || rec.finalized) {
@@ -343,6 +361,7 @@ export class ExecRegistry {
     const history = historyRecord(rec, finalState, result);
     this.active.delete(id);
     this.pushRecent(history);
+    if (history.remote_exit_confirmed === false) this.unconfirmed.set(id, history);
     return { finalized: true, record: history };
   }
 
@@ -368,8 +387,21 @@ export class ExecRegistry {
     rec.late_exit_observed_at = new Date().toISOString();
     if (result.exitCode !== undefined) rec.exit_code = result.exitCode;
     if (result.signal !== undefined) rec.signal = result.signal;
-    this.unconfirmed.delete(id);
+    if (result.remoteExitConfirmed !== undefined && result.remoteExitConfirmed !== null) {
+      rec.remote_exit_confirmed = result.remoteExitConfirmed;
+    }
+    if (rec.remote_exit_confirmed === true) this.unconfirmed.delete(id);
     this.metrics.lateTransportCloseTotal++;
+    return true;
+  }
+
+  observeLateRemoteConfirmation(id: string, result: FinalizeInput = {}): boolean {
+    const rec = this.unconfirmed.get(id) || this.findRecent(id);
+    if (!rec || rec.remote_exit_confirmed === true) return false;
+    rec.remote_exit_confirmed = true;
+    if (result.exitCode !== undefined) rec.exit_code = result.exitCode;
+    if (result.signal !== undefined) rec.signal = result.signal;
+    this.unconfirmed.delete(id);
     return true;
   }
 
@@ -397,10 +429,10 @@ export class ExecRegistry {
     | { found: false; result: 'exec_not_found'; exec_id: string } {
     const active = this.active.get(id);
     if (active) return { found: true, source: 'active', task: publicActive(active, now) };
-    const recent = this.findRecent(id);
-    if (recent) return { found: true, source: 'recent', task: { ...recent } };
     const unconfirmed = this.unconfirmed.get(id);
     if (unconfirmed) return { found: true, source: 'unconfirmed', task: { ...unconfirmed } };
+    const recent = this.findRecent(id);
+    if (recent) return { found: true, source: 'recent', task: { ...recent } };
     return { found: false, result: 'exec_not_found', exec_id: id };
   }
 

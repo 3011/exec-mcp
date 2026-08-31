@@ -4,6 +4,24 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-31
+
+### Changed
+
+- Replaced the remote shell plus timeout/cancel watcher model with one Python remote supervisor that owns command launch, process-group lifecycle, deadlines, cancellation, TERM-to-KILL escalation, reaping, and the authoritative final execution result.
+- Execution stdout/stderr and control messages now share one framed SSH session; bounded non-blocking backpressure keeps the supervisor control loop responsive even when the client temporarily stops consuming output.
+- Remote termination outcomes now come from explicit supervisor result frames instead of being inferred from SSH exit codes or local timer timing.
+
+### Added
+
+- Added an atomic, secret-free remote result journal with ACK cleanup and exceptional-path reconciliation so a lost SSH transport can recover the supervisor's final result without changing the normal single-SSH path.
+- Added regression coverage for local event-loop stalls, stdout backpressure, exit-code 143 ambiguity, result-journal cleanup, and SSH transport loss with process-group cleanup.
+
+### Fixed
+
+- Remote deadlines remain authoritative when the local Node event loop is stalled or SSH output is backpressured.
+- Remote state that cannot be authoritatively confirmed now opens the execution circuit and blocks new work instead of being finalized as an ordinary failure.
+
 ## [0.7.3] - 2026-08-31
 
 ### Fixed

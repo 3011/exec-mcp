@@ -3,10 +3,19 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { parseConfig } from '../dist/src/config.js';
-import { ExecRunner } from '../dist/src/exec-runner.js';
+import { ExecRunner, spawnRemoteProcess } from '../dist/src/exec-runner.js';
 import { remoteTestEnv } from '../scripts/helpers.js';
+import {
+  REMOTE_SUPERVISOR_PROTOCOL_VERSION,
+  REMOTE_SUPERVISOR_PY,
+  RemoteSupervisorFrameDecoder,
+  encodeSupervisorAck,
+  encodeSupervisorConfig,
+  parseSupervisorJson
+} from '../dist/src/remote-supervisor.js';
 
 function makeRunner(overrides = {}) {
   return new ExecRunner(parseConfig({
@@ -239,6 +248,154 @@ test('manual cancel prevents a detached background marker from firing after tran
     assert.equal(final.task.remote_exit_confirmed, true);
     await new Promise((resolve) => setTimeout(resolve, 2300));
     assert.equal(existsSync(marker), false, 'cancelled remote process group must not create marker later');
+  } finally {
+    runner.close();
+    await rm(marker, { force: true });
+  }
+});
+
+test('remote supervisor timeout remains authoritative while the local event loop is stalled', async () => {
+  const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '2' });
+  try {
+    const execution = runner.run({ command: 'sleep 5', cwd: '/tmp', timeout_seconds: 1 }, () => {});
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const blockedUntil = Date.now() + 2200;
+    while (Date.now() < blockedUntil) {
+      // Intentionally block Node timers/I/O. The remote supervisor must enforce and report the deadline itself.
+    }
+
+    const summary = await execution;
+    assert.equal(summary.timed_out, true);
+    assert.equal(summary.code, 143);
+    const record = runner.registry.recent.at(-1);
+    assert.equal(record.final_state, 'timed_out');
+    assert.equal(record.abort_reason, 'request_timeout');
+    assert.equal(record.remote_exit_confirmed, true);
+    assert.equal(record.transport_exit_confirmed, true);
+  } finally {
+    runner.close();
+  }
+});
+
+test('a command that exits 143 by itself is a normal failed exit, not a timeout', async () => {
+  const runner = makeRunner();
+  try {
+    const summary = await runner.run({ command: 'exit 143', cwd: '/tmp', timeout_seconds: 2 }, () => {});
+    assert.equal(summary.code, 143);
+    assert.equal(summary.timed_out, false);
+    const record = runner.registry.recent.at(-1);
+    assert.equal(record.final_state, 'failed');
+    assert.equal(record.abort_reason, null);
+    assert.equal(record.remote_exit_confirmed, true);
+  } finally {
+    runner.close();
+  }
+});
+
+
+test('remote supervisor deadline is independent of stdout backpressure', async () => {
+  const config = parseConfig({
+    ALLOWED_CWDS: '/tmp,/root/exec-mcp',
+    DEFAULT_CWD: '/tmp',
+    ...remoteTestEnv()
+  });
+  const execId = `exec-${randomUUID()}`;
+  const child = spawnRemoteProcess(config, ['python3', '-c', REMOTE_SUPERVISOR_PY]);
+  const decoder = new RemoteSupervisorFrameDecoder();
+  let result = null;
+  let outputBytes = 0;
+  let startedResolve;
+  const started = new Promise((resolve) => { startedResolve = resolve; });
+  child.stdin.on('error', () => {});
+  child.stdout.on('data', (chunk) => {
+    for (const frame of decoder.push(chunk)) {
+      if (frame.type === 'O') outputBytes += frame.payload.length;
+      if (frame.type === 'S') startedResolve();
+      if (frame.type === 'R') {
+        result = parseSupervisorJson(frame.payload);
+        if (child.stdin.writable) child.stdin.write(encodeSupervisorAck(execId));
+      }
+    }
+  });
+  child.stderr.resume();
+  child.stdin.write(encodeSupervisorConfig({
+    protocol: REMOTE_SUPERVISOR_PROTOCOL_VERSION,
+    exec_id: execId,
+    command: `python3 -c 'import os; b=b"x"*65536\nwhile True: os.write(1,b)'`,
+    cwd: '/tmp',
+    timeout_seconds: 1,
+    kill_grace_seconds: 1,
+    allowed_cwds: ['/tmp', '/root/exec-mcp'],
+    env: {}
+  }));
+
+  await started;
+  const blockedUntil = Date.now() + 2500;
+  while (Date.now() < blockedUntil) {
+    // Deliberately stop consuming SSH output long enough to fill kernel/user-space buffers.
+  }
+  await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+
+  assert.ok(result, 'supervisor must emit an authoritative final result');
+  assert.equal(result.reason, 'request_timeout');
+  assert.equal(result.exit_code, 143);
+  assert.equal(result.signal, 'SIGTERM');
+  assert.equal(outputBytes > 0, true);
+  assert.equal(result.decision_ms >= 900, true);
+  assert.equal(result.decision_ms < 1800, true, `deadline decision was delayed by output backpressure: ${result.decision_ms}ms`);
+});
+
+test('normal supervisor result is acknowledged and leaves no result journal', async () => {
+  const runner = makeRunner();
+  try {
+    const summary = await runner.run({ command: 'printf journal-ok', cwd: '/tmp' }, () => {});
+    assert.equal(summary.code, 0);
+    const path = `/tmp/exec-mcp-runtime-results-${process.geteuid()}/${summary.exec_id}.json`;
+    assert.equal(existsSync(path), false, 'ACK should remove the durable result journal on the normal path');
+  } finally {
+    runner.close();
+  }
+});
+
+test('lost SSH transport reconciles the durable remote result and kills the command group', async () => {
+  const marker = `/tmp/exec-mcp-transport-loss-${process.pid}-${Date.now()}`;
+  const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '10', MAX_TIMEOUT_SECONDS: '10' });
+  try {
+    const started = runner.start({
+      command: `sleep 2; touch ${marker}`,
+      cwd: '/tmp',
+      timeout_seconds: 10,
+      label: 'transport-loss-reconcile'
+    });
+    let active = null;
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const status = await runner.getStatus(started.exec_id);
+      if (status.found && status.source === 'active' && status.task.transport_pid && status.task.remote_pid) {
+        active = status.task;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(active?.transport_pid, 'transport pid should become observable');
+    process.kill(-active.transport_pid, 'SIGKILL');
+
+    const final = await runner.getStatus(started.exec_id, { waitSeconds: 5 });
+    assert.equal(final.found, true);
+    assert.equal(final.source, 'recent');
+    assert.equal(final.task.final_state, 'failed');
+    assert.equal(final.task.failure_reason, 'remote_transport_closed');
+    assert.equal(final.task.remote_exit_confirmed, true);
+    assert.equal(final.task.transport_exit_confirmed, true);
+    assert.equal(final.task.exit_code, 143);
+    await new Promise((resolve) => setTimeout(resolve, 2300));
+    assert.equal(existsSync(marker), false, 'command group must not survive the lost SSH transport');
+    const journal = `/tmp/exec-mcp-runtime-results-${process.geteuid()}/${started.exec_id}.json`;
+    assert.equal(existsSync(journal), false, 'successful reconcile should consume the durable result journal');
   } finally {
     runner.close();
     await rm(marker, { force: true });

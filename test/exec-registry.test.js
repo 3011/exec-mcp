@@ -46,7 +46,7 @@ test('manual cancel is idempotent and finalizes as cancelled', () => {
   } finally { registry.close(); }
 });
 
-test('emergency force reap opens circuit until late transport close', () => {
+test('emergency force reap keeps circuit open until remote exit is confirmed', () => {
   const registry = new ExecRegistry({ maxActive: 1 });
   try {
     const rec = registry.acquire({ timeoutMs: 1000 });
@@ -55,6 +55,8 @@ test('emergency force reap opens circuit until late transport close', () => {
     assert.throws(() => registry.acquire({ timeoutMs: 1000 }), ExecutionCircuitOpenError);
     assert.equal(registry.recent[0].final_state, 'unconfirmed_reaped');
     assert.equal(registry.observeLateTransportClose(rec.id, { exitCode: null, signal: 'SIGKILL' }), true);
+    assert.equal(registry.circuitOpen, true, 'transport close alone is not remote exit proof');
+    assert.equal(registry.observeLateRemoteConfirmation(rec.id, { exitCode: 137, signal: 'SIGKILL' }), true);
     assert.equal(registry.circuitOpen, false);
     assert.equal(registry.recent[0].transport_exit_confirmed, true);
   } finally { registry.close(); }
@@ -86,6 +88,29 @@ test('history eviction never clears an unresolved circuit diagnostic', () => {
     assert.equal(registry.circuitOpen, true);
     assert.equal(registry.status(stuck.id).source, 'unconfirmed');
     registry.observeLateTransportClose(stuck.id);
+    assert.equal(registry.circuitOpen, true);
+    registry.observeLateRemoteConfirmation(stuck.id, { exitCode: 137, signal: 'SIGKILL' });
+    assert.equal(registry.circuitOpen, false);
+  } finally { registry.close(); }
+});
+
+
+test('finalized execution with unconfirmed remote exit opens the circuit', () => {
+  const registry = new ExecRegistry({ maxActive: 1 });
+  try {
+    const rec = registry.acquire({ timeoutMs: 1000 });
+    registry.finalize(rec.id, {
+      exitCode: null,
+      transportExitConfirmed: true,
+      remoteExitConfirmed: false,
+      finalState: 'failed',
+      failureReason: 'remote_result_missing'
+    });
+    assert.equal(registry.circuitOpen, true);
+    assert.equal(registry.unconfirmedCount, 1);
+    assert.equal(registry.status(rec.id).source, 'unconfirmed');
+    assert.throws(() => registry.acquire({ timeoutMs: 1000 }), ExecutionCircuitOpenError);
+    assert.equal(registry.observeLateRemoteConfirmation(rec.id, { exitCode: 143, signal: 'SIGTERM' }), true);
     assert.equal(registry.circuitOpen, false);
   } finally { registry.close(); }
 });

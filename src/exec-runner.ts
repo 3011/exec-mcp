@@ -13,6 +13,22 @@ import { RuntimeObserver, deriveRuntimeDiagnostics, runtimeStateLevel } from './
 import type { RuntimeOrigin } from './runtime-observer.js';
 import { TaskContextStore, TASK_HANDLE_PATTERN } from './task-context.js';
 import type { TaskContext } from './task-context.js';
+import {
+  REMOTE_SUPERVISOR_PROTOCOL_VERSION,
+  REMOTE_SUPERVISOR_PY,
+  REMOTE_SUPERVISOR_RECONCILE_PY,
+  RemoteSupervisorFrameDecoder,
+  encodeSupervisorAbort,
+  encodeSupervisorAck,
+  encodeSupervisorConfig,
+  parseSupervisorJson
+} from './remote-supervisor.js';
+import type {
+  RemoteSupervisorError,
+  RemoteSupervisorOutcomeReason,
+  RemoteSupervisorResult,
+  RemoteSupervisorStarted
+} from './remote-supervisor.js';
 
 type UnknownRecord = Record<string, unknown>;
 type EventPayload = { type: string; [key: string]: unknown };
@@ -267,7 +283,7 @@ export class ExecRunner {
     }
 
     if (this.registry.circuitOpen) {
-      const err = new ExecutionCircuitOpenError(this.registry.unconfirmed.size);
+      const err = new ExecutionCircuitOpenError(this.registry.unconfirmedCount);
       this.bumpRejected(err.code);
       throw new ExecRejectedError(err.code, err.message, { reason: err.reason, unconfirmed_count: err.unconfirmedCount });
     }
@@ -417,15 +433,18 @@ export class ExecRunner {
     let stderrBytes = 0;
     let forwardedBytes = 0;
     let truncated = false;
-    let timedOut = false;
-    let killedSignal: NodeJS.Signals | null = null;
-    let childExited = false;
     let timeoutCounted = false;
     let disconnectCounted = false;
+    let killedSignal: NodeJS.Signals | null = null;
+    let childExited = false;
     let heartbeat: NodeJS.Timeout | null = null;
     let sigkillTimer: NodeJS.Timeout | null = null;
     let abortFallbackTimer: NodeJS.Timeout | null = null;
-    let remoteAbortPromise: Promise<boolean> | null = null;
+    const supervisorState: { result: RemoteSupervisorResult | null; error: RemoteSupervisorError | null; protocolError: string | null } = {
+      result: null, error: null, protocolError: null
+    };
+    const transportStderr = new RingBuffer(8192);
+    const decoder = new RemoteSupervisorFrameDecoder();
     const acceptedAt = new Date(rec.createdAt);
     const tailBufferBytes = Math.min(this.config.ringBufferBytes, req.maxOutputBytes);
     const stdoutTail = new RingBuffer(tailBufferBytes);
@@ -452,25 +471,35 @@ export class ExecRunner {
       sigkillTimer = setTimeout(() => {
         if (!childExited) {
           this.registry.markKilling(rec.id);
-          if (timedOut) send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action });
+          send({ type: 'error', code: 'transport_termination_fallback', message: action });
           killGroup('SIGKILL');
         }
       }, delaySeconds * 1000);
       sigkillTimer.unref?.();
     };
 
-    const beginRemoteAbort = (): void => {
+    const requestSupervisorAbort = (reasonCode: string): void => {
       if (!child || childExited) return;
-      if (!remoteAbortPromise) remoteAbortPromise = requestRemoteCancellation(this.config, execId, this.config.killGraceSeconds);
+      try {
+        if (child.stdin.writable) child.stdin.write(encodeSupervisorAbort(reasonCode));
+      } catch {}
       if (!abortFallbackTimer) {
         abortFallbackTimer = setTimeout(() => {
           if (childExited) return;
           this.registry.markKilling(rec.id);
           killGroup('SIGTERM');
-          scheduleSigkill(this.config.killGraceSeconds, timedOut ? 'local_sigkill_fallback' : 'sigkill');
+          scheduleSigkill(this.config.killGraceSeconds, 'local_transport_sigkill_fallback');
         }, (this.config.killGraceSeconds + 6) * 1000);
         abortFallbackTimer.unref?.();
       }
+    };
+
+    const noteTimeout = (reasonCode: string, action: string): void => {
+      if (!timeoutCounted) {
+        timeoutCounted = true;
+        this.metrics.timeoutTotal++;
+      }
+      send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action, reason: reasonCode });
     };
 
     const onRegistryAbort = (): void => {
@@ -479,20 +508,82 @@ export class ExecRunner {
       this.runtimeObserver.event(rec.id, 'abort_requested', { level: runtimeStateLevel(rec.state), detail: `${reasonCode} · ${rec.abortSource || 'unknown source'}` });
       this.logLifecycle(rec.state, rec.id, { abort_source: rec.abortSource, transport_pid: rec.transportPid });
       if (reasonCode === 'request_timeout' || reasonCode === 'reaper_grace_exceeded') {
-        timedOut = true;
-        if (!timeoutCounted) {
-          timeoutCounted = true;
-          this.metrics.timeoutTotal++;
-        }
-        send({ type: 'timeout', timeout_seconds: req.timeoutSeconds, action: 'remote_watchdog', reason: reasonCode });
-        beginRemoteAbort();
-        return;
-      }
-      if (reasonCode !== 'executor_shutdown' && !disconnectCounted) {
+        noteTimeout(reasonCode, 'remote_supervisor_request');
+      } else if (reasonCode !== 'executor_shutdown' && !disconnectCounted) {
         disconnectCounted = true;
         this.metrics.streamDisconnectTotal++;
       }
-      beginRemoteAbort();
+      requestSupervisorAbort(reasonCode);
+    };
+
+    const maybeForward = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
+      const len = chunk.length;
+      this.runtimeObserver.output(rec.id, stream, len);
+      const streamText = redact(chunk.toString('utf8'));
+      const jobLogText = stream === 'stdout' ? job.stdoutRedactor.push(chunk) : job.stderrRedactor.push(chunk);
+      if (stream === 'stdout') {
+        stdoutBytes += len;
+        this.metrics.outputBytesTotal.stdout += len;
+        stdoutTail.append(chunk);
+        job.stdoutLog.append(jobLogText);
+      } else {
+        stderrBytes += len;
+        this.metrics.outputBytesTotal.stderr += len;
+        stderrTail.append(chunk);
+        job.stderrLog.append(jobLogText);
+      }
+
+      if (forwardedBytes < req.maxOutputBytes) {
+        const remain = req.maxOutputBytes - forwardedBytes;
+        const redactedBuffer = Buffer.from(streamText, 'utf8');
+        const toSend = redactedBuffer.length > remain ? redactedBuffer.subarray(0, remain) : redactedBuffer;
+        forwardedBytes += toSend.length;
+        send({ type: stream, data: toSend.toString('utf8'), seq: ++seq });
+      }
+
+      if (!truncated && stdoutBytes + stderrBytes > req.maxOutputBytes) {
+        truncated = true;
+        this.metrics.truncatedTotal++;
+        send({ type: 'truncated', stream: 'combined', max_output_bytes: req.maxOutputBytes });
+      }
+    };
+
+    const handleSupervisorFrame = (type: string, payload: Buffer): void => {
+      if (type === 'O') {
+        maybeForward('stdout', payload);
+        return;
+      }
+      if (type === 'E') {
+        maybeForward('stderr', payload);
+        return;
+      }
+      if (type === 'S') {
+        const started = parseSupervisorJson<RemoteSupervisorStarted>(payload);
+        if (started.protocol !== REMOTE_SUPERVISOR_PROTOCOL_VERSION || !Number.isInteger(started.pid) || !Number.isInteger(started.pgid)) {
+          throw new Error('invalid remote supervisor started frame');
+        }
+        rec.remotePid = started.pid;
+        rec.remotePgid = started.pgid;
+        return;
+      }
+      if (type === 'R') {
+        const result = parseSupervisorJson<RemoteSupervisorResult>(payload);
+        if (result.protocol !== REMOTE_SUPERVISOR_PROTOCOL_VERSION || result.exec_id !== execId || !isRemoteOutcomeReason(result.reason)) {
+          throw new Error('invalid remote supervisor result frame');
+        }
+        supervisorState.result = result;
+        try {
+          if (child?.stdin.writable) child.stdin.write(encodeSupervisorAck(execId));
+        } catch {}
+        if (result.reason === 'request_timeout' || result.reason === 'reaper_grace_exceeded') {
+          if (!timeoutCounted) noteTimeout(result.reason, 'remote_supervisor_confirmed');
+        }
+        return;
+      }
+      if (type === 'X') {
+        const error = parseSupervisorJson<RemoteSupervisorError>(payload);
+        supervisorState.error = error;
+      }
     };
 
     try {
@@ -504,10 +595,11 @@ export class ExecRunner {
 
       const spawned = spawnCommand(this.config, req, execId);
       child = spawned.child;
-      req.env = {};
       this.registry.markTransportStarted(rec.id, child.pid);
       this.runtimeObserver.event(rec.id, 'transport_started', { detail: child.pid ? `pid ${child.pid}` : null });
-      if (spawned.stdin) child.stdin.end(spawned.stdin);
+      child.stdin.on('error', () => {});
+      child.stdin.write(spawned.bootstrap);
+      req.env = {};
 
       if (!this.registry.markRunning(rec.id)) {
         if (rec.controller.signal.aborted) onRegistryAbort();
@@ -518,40 +610,17 @@ export class ExecRunner {
       }
       send({ type: 'start', transport_pid: child.pid, started_at: new Date(rec.runningAt || rec.createdAt).toISOString(), cwd: req.cwd });
 
-      const maybeForward = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-        const len = chunk.length;
-        this.runtimeObserver.output(rec.id, stream, len);
-        const streamText = redact(chunk.toString('utf8'));
-        const jobLogText = stream === 'stdout' ? job.stdoutRedactor.push(chunk) : job.stderrRedactor.push(chunk);
-        if (stream === 'stdout') {
-          stdoutBytes += len;
-          this.metrics.outputBytesTotal.stdout += len;
-          stdoutTail.append(chunk);
-          job.stdoutLog.append(jobLogText);
-        } else {
-          stderrBytes += len;
-          this.metrics.outputBytesTotal.stderr += len;
-          stderrTail.append(chunk);
-          job.stderrLog.append(jobLogText);
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (supervisorState.protocolError) return;
+        try {
+          for (const frame of decoder.push(chunk)) handleSupervisorFrame(frame.type, frame.payload);
+        } catch (err) {
+          supervisorState.protocolError = errorMessage(err);
+          killGroup('SIGTERM');
+          scheduleSigkill(1, 'protocol_error');
         }
-
-        if (forwardedBytes < req.maxOutputBytes) {
-          const remain = req.maxOutputBytes - forwardedBytes;
-          const redactedBuffer = Buffer.from(streamText, 'utf8');
-          const toSend = redactedBuffer.length > remain ? redactedBuffer.subarray(0, remain) : redactedBuffer;
-          forwardedBytes += toSend.length;
-          send({ type: stream, data: toSend.toString('utf8'), seq: ++seq });
-        }
-
-        if (!truncated && stdoutBytes + stderrBytes > req.maxOutputBytes) {
-          truncated = true;
-          this.metrics.truncatedTotal++;
-          send({ type: 'truncated', stream: 'combined', max_output_bytes: req.maxOutputBytes });
-        }
-      };
-
-      child.stdout.on('data', (chunk: Buffer) => maybeForward('stdout', chunk));
-      child.stderr.on('data', (chunk: Buffer) => maybeForward('stderr', chunk));
+      });
+      child.stderr.on('data', (chunk: Buffer) => transportStderr.append(chunk));
 
       heartbeat = setInterval(() => {
         this.runtimeObserver.touch(rec.id);
@@ -565,38 +634,16 @@ export class ExecRunner {
       heartbeat.unref?.();
 
       const runningChild = child;
-      finalSummary = await new Promise<ExecSummary>((resolveRun) => {
+      const transport = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveTransport) => {
         let finished = false;
         const finish = (code: number | null, signal: NodeJS.Signals | null): void => {
           if (finished) return;
           finished = true;
           childExited = true;
+          try { decoder.finish(); } catch (err) { supervisorState.protocolError ||= errorMessage(err); }
           this.runtimeObserver.event(rec.id, 'transport_closed', { detail: code !== null ? `exit ${code}` : signal });
-          const stdoutRemainder = job.stdoutRedactor.flush();
-          const stderrRemainder = job.stderrRedactor.flush();
-          if (stdoutRemainder) job.stdoutLog.append(stdoutRemainder);
-          if (stderrRemainder) job.stderrLog.append(stderrRemainder);
-          const durationMs = Date.now() - acceptedAt.getTime();
-          this.metrics.durationMsTotal += durationMs;
-          this.bumpMap(this.metrics.exitCodeTotal, String(code ?? signal ?? 'null'));
-          const tails = boundedRedactedTails(stdoutTail.toString(), stderrTail.toString(), req.maxOutputBytes);
-          const summary: Omit<ExecSummary, 'exec_id'> = {
-            type: 'exit',
-            code,
-            signal: signal || killedSignal,
-            duration_ms: durationMs,
-            stdout_bytes: stdoutBytes,
-            stderr_bytes: stderrBytes,
-            truncated,
-            timed_out: timedOut,
-            stdout_tail: tails.stdout_tail,
-            stderr_tail: tails.stderr_tail,
-            task_handle: rec.taskHandle
-          };
-          send(summary);
-          resolveRun({ exec_id: execId, ...summary });
+          resolveTransport({ code, signal });
         };
-
         runningChild.on('error', (err) => {
           spawnFailed = true;
           send({ type: 'error', code: 'spawn_failed', message: err.message });
@@ -604,7 +651,63 @@ export class ExecRunner {
         runningChild.on('exit', () => { childExited = true; });
         runningChild.on('close', finish);
       });
-      return finalSummary;
+
+      if (!supervisorState.result && !supervisorState.error && !spawnFailed) {
+        // Primary transport closed without an authoritative result. Quarantine execution
+        // admission immediately while a bounded journal-recovery window runs.
+        this.registry.markRemoteUnconfirmed(execId);
+        const recovered = await reconcileRemoteSupervisorResultUntil(
+          this.config,
+          execId,
+          Math.max(5, Math.min(30, this.config.emergencyReapSeconds))
+        );
+        if (recovered) {
+          this.registry.markRemoteConfirmed(execId);
+          supervisorState.result = recovered;
+          if (isRemoteTimeout(recovered.reason) && !timeoutCounted) {
+            noteTimeout(recovered.reason, 'remote_supervisor_reconciled');
+          }
+        }
+      }
+
+      if (!supervisorState.result) {
+        const internal = transportStderr.toString();
+        if (internal) maybeForward('stderr', Buffer.from(internal, 'utf8'));
+        if (supervisorState.error) {
+          const message = `${supervisorState.error.code}: ${supervisorState.error.message}`;
+          maybeForward('stderr', Buffer.from((internal ? '\n' : '') + message + '\n', 'utf8'));
+        } else if (supervisorState.protocolError) {
+          maybeForward('stderr', Buffer.from((internal ? '\n' : '') + `remote_supervisor_protocol_error: ${supervisorState.protocolError}\n`, 'utf8'));
+        }
+      }
+
+      const stdoutRemainder = job.stdoutRedactor.flush();
+      const stderrRemainder = job.stderrRedactor.flush();
+      if (stdoutRemainder) job.stdoutLog.append(stdoutRemainder);
+      if (stderrRemainder) job.stderrLog.append(stderrRemainder);
+      const durationMs = Date.now() - acceptedAt.getTime();
+      this.metrics.durationMsTotal += durationMs;
+      const code = supervisorState.result?.exit_code ?? supervisorState.error?.exit_code ?? null;
+      const signal = supervisorState.result ? toNodeSignal(supervisorState.result.signal) : (transport.signal || killedSignal);
+      this.bumpMap(this.metrics.exitCodeTotal, String(code ?? signal ?? 'null'));
+      const tails = boundedRedactedTails(stdoutTail.toString(), stderrTail.toString(), req.maxOutputBytes);
+      const summary: ExecSummary = {
+        exec_id: execId,
+        type: 'exit',
+        code,
+        signal,
+        duration_ms: durationMs,
+        stdout_bytes: stdoutBytes,
+        stderr_bytes: stderrBytes,
+        truncated,
+        timed_out: supervisorState.result ? isRemoteTimeout(supervisorState.result.reason) : false,
+        stdout_tail: tails.stdout_tail,
+        stderr_tail: tails.stderr_tail,
+        task_handle: rec.taskHandle
+      };
+      finalSummary = summary;
+      send({ ...summary });
+      return summary;
     } catch (err) {
       if (!child && !rec.abortReason) {
         spawnFailed = true;
@@ -617,12 +720,39 @@ export class ExecRunner {
       if (sigkillTimer) clearTimeout(sigkillTimer);
       if (abortFallbackTimer) clearTimeout(abortFallbackTimer);
       rec.controller.signal.removeEventListener('abort', onRegistryAbort);
+
       let remoteExitConfirmed: boolean | null = null;
-      if (rec.abortReason) {
-        remoteExitConfirmed = child ? (remoteAbortPromise ? await remoteAbortPromise : false) : true;
-      } else if (child && childExited && !spawnFailed) {
+      let finalState: FinalExecutionState | undefined;
+      let failureReason: string | undefined;
+      if (supervisorState.result) {
+        const result = supervisorState.result;
+        remoteExitConfirmed = true;
+        finalState = remoteOutcomeFinalState(result.reason, result.exit_code);
+        const remoteAbortReason = remoteOutcomeAbortReason(result.reason);
+        if (remoteAbortReason) {
+          if (rec.abortReason !== remoteAbortReason) rec.abortSource = 'remote_supervisor';
+          rec.abortReason = remoteAbortReason;
+        } else {
+          rec.abortReason = null;
+          rec.abortSource = null;
+        }
+        if (result.reason === 'executor_shutdown') failureReason = 'executor_restarted';
+        if (result.reason === 'transport_closed') failureReason = 'remote_transport_closed';
+        if (result.reason === 'supervisor_signal') failureReason = 'remote_supervisor_signal';
+      } else if (child && supervisorState.error) {
+        remoteExitConfirmed = true;
+        finalState = supervisorState.error.code === 'spawn_failed' ? 'spawn_failed' : 'failed';
+        failureReason = supervisorState.error.code;
+        rec.abortReason = null;
+        rec.abortSource = null;
+      } else if (child) {
+        remoteExitConfirmed = false;
+        finalState = 'failed';
+        failureReason = rec.abortReason ? 'remote_termination_unconfirmed' : (supervisorState.protocolError ? 'remote_supervisor_protocol_error' : 'remote_result_missing');
+      } else {
         remoteExitConfirmed = true;
       }
+
       const finalizeInput = {
         exitCode: finalSummary?.code ?? null,
         signal: finalSummary?.signal ?? null,
@@ -630,11 +760,8 @@ export class ExecRunner {
         remoteExitConfirmed,
         spawnFailed
       } as { exitCode: number | null; signal: NodeJS.Signals | null; transportExitConfirmed: boolean; remoteExitConfirmed: boolean | null; spawnFailed: boolean; finalState?: FinalExecutionState; failureReason?: string };
-      if (rec.abortReason === 'executor_shutdown') finalizeInput.failureReason = 'executor_restarted';
-      if (rec.abortReason && remoteExitConfirmed === false) {
-        finalizeInput.finalState = 'failed';
-        finalizeInput.failureReason = 'remote_termination_unconfirmed';
-      }
+      if (finalState) finalizeInput.finalState = finalState;
+      if (failureReason) finalizeInput.failureReason = failureReason;
       const finalized = this.registry.finalize(rec.id, finalizeInput);
       this.recordFinalization(job, finalized.record);
     }
@@ -1079,8 +1206,19 @@ function abortReasonCode(reason: unknown): string {
   return String(reason || 'aborted');
 }
 
-function spawnCommand(config: ExecMcpConfig, req: ValidatedExecRequest, execId: string): { child: ChildProcessWithoutNullStreams; stdin: string } {
-  return spawnRemoteShell(config, buildRemoteScript(req, execId));
+function spawnCommand(config: ExecMcpConfig, req: ValidatedExecRequest, execId: string): { child: ChildProcessWithoutNullStreams; bootstrap: Buffer } {
+  const child = spawnRemoteProcess(config, ['python3', '-c', REMOTE_SUPERVISOR_PY]);
+  const bootstrap = encodeSupervisorConfig({
+    protocol: REMOTE_SUPERVISOR_PROTOCOL_VERSION,
+    exec_id: execId,
+    command: req.command,
+    cwd: req.cwd,
+    timeout_seconds: req.timeoutSeconds,
+    kill_grace_seconds: req.killGraceSeconds,
+    allowed_cwds: req.allowedCwds,
+    env: req.env
+  });
+  return { child, bootstrap };
 }
 
 export function spawnRemoteProcess(config: ExecMcpConfig, remoteCommand: readonly string[]): ChildProcessWithoutNullStreams {
@@ -1108,156 +1246,111 @@ export function spawnRemoteProcess(config: ExecMcpConfig, remoteCommand: readonl
   });
 }
 
-export function spawnRemoteShell(config: ExecMcpConfig, stdin: string): { child: ChildProcessWithoutNullStreams; stdin: string } {
-  return { child: spawnRemoteProcess(config, ['/bin/sh', '-s']), stdin };
+async function reconcileRemoteSupervisorResultUntil(
+  config: ExecMcpConfig,
+  execId: string,
+  totalWaitSeconds: number
+): Promise<RemoteSupervisorResult | null> {
+  const deadline = Date.now() + Math.max(0, totalWaitSeconds) * 1000;
+  do {
+    const remainingMs = Math.max(0, deadline - Date.now());
+    const perAttemptSeconds = Math.min(2, Math.max(0.25, remainingMs / 1000));
+    const result = await reconcileRemoteSupervisorResult(config, execId, perAttemptSeconds);
+    if (result) return result;
+    if (Date.now() >= deadline) break;
+    await delay(Math.min(250, Math.max(25, deadline - Date.now())));
+  } while (Date.now() < deadline);
+  return null;
 }
 
-function buildRemoteScript(req: ValidatedExecRequest, execId: string): string {
-  const lines: string[] = [];
-  lines.push('set -eu');
-  lines.push(`CWD_B64='${b64(req.cwd)}'`);
-  lines.push(`CMD_B64='${b64(req.command)}'`);
-  lines.push(`TIMEOUT_SECONDS='${Number.parseInt(String(req.timeoutSeconds), 10)}'`);
-  lines.push(`KILL_GRACE_SECONDS='${Math.max(1, Number.parseInt(String(req.killGraceSeconds), 10) || 1)}'`);
-  lines.push(`CONTROL_DIR_B64='${b64(remoteControlDir(execId))}'`);
-  lines.push('CWD=$(printf %s "$CWD_B64" | base64 -d)');
-  lines.push('CONTROL_DIR=$(printf %s "$CONTROL_DIR_B64" | base64 -d)');
-  lines.push('CANCEL_FILE="$CONTROL_DIR/cancel"');
-  lines.push('DONE_FILE="$CONTROL_DIR/done"');
-  lines.push('PGID_FILE="$CONTROL_DIR/pgid"');
-  lines.push('STOP_FILE="$CONTROL_DIR/stop"');
-  lines.push('umask 077');
-  lines.push('mkdir -p "$CONTROL_DIR"');
-  lines.push('rm -f "$DONE_FILE" "$PGID_FILE" "$STOP_FILE"');
-  lines.push('CMD=$(printf %s "$CMD_B64" | base64 -d)');
-  lines.push('if ! command -v setsid >/dev/null 2>&1; then echo "remote_environment_error: setsid is required" >&2; exit 127; fi');
-  lines.push('REAL_CWD=$(cd "$CWD" 2>/dev/null && pwd -P) || { echo "invalid_cwd: cwd does not exist or is not accessible: $CWD" >&2; exit 126; }');
-  lines.push('is_under_path() {');
-  lines.push('  candidate="$1"');
-  lines.push('  base="$2"');
-  lines.push('  if [ "$base" = "/" ]; then return 0; fi');
-  lines.push('  case "$candidate" in "$base"|"$base"/*) return 0 ;; *) return 1 ;; esac');
-  lines.push('}');
-  lines.push('CWD_ALLOWED=0');
-  for (const base of req.allowedCwds || []) {
-    lines.push(`BASE_B64='${b64(base)}'`);
-    lines.push('BASE=$(printf %s "$BASE_B64" | base64 -d)');
-    lines.push('if REAL_BASE=$(cd "$BASE" 2>/dev/null && pwd -P); then');
-    lines.push('  if is_under_path "$REAL_CWD" "$REAL_BASE"; then CWD_ALLOWED=1; fi');
-    lines.push('fi');
-  }
-  lines.push('if [ "$CWD_ALLOWED" != 1 ]; then echo "invalid_cwd: real cwd is not allowed: $REAL_CWD" >&2; exit 126; fi');
-  for (const [key, value] of Object.entries(req.env || {})) {
-    lines.push(`${key}_B64='${b64(value)}'`);
-    lines.push(`export ${key}=$(printf %s "$${key}_B64" | base64 -d)`);
-  }
-  lines.push('cd "$REAL_CWD"');
-  lines.push('CHILD_PID=');
-  lines.push('WATCHDOG_PID=');
-  lines.push('CANCEL_WATCH_PID=');
-  lines.push('kill_child_group() {');
-  lines.push('  sig="$1"');
-  lines.push('  if [ -n "${CHILD_PID:-}" ]; then');
-  lines.push("    python3 -c 'import os,signal,sys; pgid=int(sys.argv[1]); sig=getattr(signal,\"SIG\"+sys.argv[2])\ntry: os.killpg(pgid,sig)\nexcept ProcessLookupError: pass' \"$CHILD_PID\" \"$sig\" 2>/dev/null || true");
-  lines.push('  fi');
-  lines.push('}');
-  lines.push('child_group_alive() {');
-  lines.push('  [ -n "${CHILD_PID:-}" ] || return 1');
-  lines.push("  python3 -c 'import os,sys; pgid=int(sys.argv[1])\ntry: os.killpg(pgid,0)\nexcept ProcessLookupError: raise SystemExit(1)\nexcept PermissionError: pass' \"$CHILD_PID\" 2>/dev/null");
-  lines.push('}');
-  lines.push('stop_watchdogs() {');
-  lines.push('  : > "$STOP_FILE"');
-  lines.push('  if [ -n "${WATCHDOG_PID:-}" ]; then');
-  lines.push('    wait "$WATCHDOG_PID" 2>/dev/null || true');
-  lines.push('  fi');
-  lines.push('  if [ -n "${CANCEL_WATCH_PID:-}" ]; then');
-  lines.push('    wait "$CANCEL_WATCH_PID" 2>/dev/null || true');
-  lines.push('  fi');
-  lines.push('}');
-  lines.push('mark_done() {');
-  lines.push('  if [ -e "$CANCEL_FILE" ]; then : > "$DONE_FILE"; else rm -rf "$CONTROL_DIR"; fi');
-  lines.push('}');
-  lines.push('terminate_child_group() {');
-  lines.push('  trap - TERM HUP INT EXIT');
-  lines.push('  kill_child_group TERM');
-  lines.push('  sleep "$KILL_GRACE_SECONDS"');
-  lines.push('  kill_child_group KILL');
-  lines.push('  stop_watchdogs');
-  lines.push('  mark_done');
-  lines.push('  exit 143');
-  lines.push('}');
-  lines.push('trap terminate_child_group TERM HUP INT');
-  lines.push('setsid /bin/sh -c "$CMD" &');
-  lines.push('CHILD_PID=$!');
-  lines.push("printf '%s\\n' \"$CHILD_PID\" > \"$PGID_FILE\"");
-  lines.push("python3 -c 'import os,signal,sys,time\npgid=int(sys.argv[1]); cancel=sys.argv[2]; stop=sys.argv[3]; grace=float(sys.argv[4])\ndef alive():\n    try: os.killpg(pgid,0); return True\n    except ProcessLookupError: return False\nwhile alive():\n    if os.path.exists(stop): break\n    if os.path.exists(cancel):\n        try: os.killpg(pgid,signal.SIGTERM)\n        except ProcessLookupError: break\n        end=time.monotonic()+grace\n        while time.monotonic() < end and alive(): time.sleep(0.05)\n        if alive():\n            try: os.killpg(pgid,signal.SIGKILL)\n            except ProcessLookupError: pass\n        break\n    time.sleep(0.05)' \"$CHILD_PID\" \"$CANCEL_FILE\" \"$STOP_FILE\" \"$KILL_GRACE_SECONDS\" </dev/null >/dev/null 2>&1 &");
-  lines.push('CANCEL_WATCH_PID=$!');
-  lines.push("python3 -c 'import os,signal,sys,time\npgid=int(sys.argv[1]); stop=sys.argv[2]; timeout=float(sys.argv[3]); grace=float(sys.argv[4])\ndef alive():\n    try: os.killpg(pgid,0); return True\n    except ProcessLookupError: return False\ndef kill(sig):\n    try: os.killpg(pgid,sig)\n    except ProcessLookupError: pass\ndeadline=time.monotonic()+timeout\nwhile time.monotonic() < deadline:\n    if os.path.exists(stop) or not alive(): raise SystemExit(0)\n    time.sleep(min(0.05,max(0.0,deadline-time.monotonic())))\nif os.path.exists(stop) or not alive(): raise SystemExit(0)\nkill(signal.SIGTERM)\nend=time.monotonic()+grace\nwhile time.monotonic() < end and alive(): time.sleep(0.05)\nif alive(): kill(signal.SIGKILL)' \"$CHILD_PID\" \"$STOP_FILE\" \"$TIMEOUT_SECONDS\" \"$KILL_GRACE_SECONDS\" </dev/null >/dev/null 2>&1 &");
-  lines.push('WATCHDOG_PID=$!');
-  lines.push('set +e');
-  lines.push('wait "$CHILD_PID"');
-  lines.push('STATUS=$?');
-  lines.push('set -e');
-  lines.push('stop_watchdogs');
-  lines.push('trap - TERM HUP INT');
-  lines.push('if child_group_alive; then');
-  lines.push('  kill_child_group TERM');
-  lines.push('  sleep 1');
-  lines.push('  kill_child_group KILL');
-  lines.push('fi');
-  lines.push('mark_done');
-  lines.push('exit "$STATUS"');
-  return lines.join('\n') + '\n';
-}
-
-
-function remoteControlDir(execId: string): string {
-  if (!/^exec-[0-9a-f-]+$/i.test(execId)) throw new Error(`invalid exec id for remote control path: ${execId}`);
-  return `/tmp/exec-mcp-runtime/${execId}`;
-}
-
-async function requestRemoteCancellation(config: ExecMcpConfig, execId: string, killGraceSeconds: number): Promise<boolean> {
-  const controlDir = remoteControlDir(execId);
-  const maxWaitSeconds = Math.max(10, killGraceSeconds + 10);
-  const script = [
-    'set -eu',
-    `CONTROL_DIR_B64='${b64(controlDir)}'`,
-    `MAX_WAIT_SECONDS='${maxWaitSeconds}'`,
-    'CONTROL_DIR=$(printf %s "$CONTROL_DIR_B64" | base64 -d)',
-    'CANCEL_FILE="$CONTROL_DIR/cancel"',
-    'DONE_FILE="$CONTROL_DIR/done"',
-    'umask 077',
-    'mkdir -p "$CONTROL_DIR"',
-    ': > "$CANCEL_FILE"',
-    'LEFT="$MAX_WAIT_SECONDS"',
-    'while [ "$LEFT" -gt 0 ]; do',
-    '  if [ -e "$DONE_FILE" ]; then rm -rf "$CONTROL_DIR"; exit 0; fi',
-    '  sleep 1',
-    '  LEFT=$((LEFT - 1))',
-    'done',
-    'exit 75'
-  ].join('\n') + '\n';
-  const { child, stdin } = spawnRemoteShell(config, script);
-  child.stdin.end(stdin);
-  child.stdout.resume();
-  child.stderr.resume();
-  const timeoutMs = (config.remote.connectTimeoutSeconds + maxWaitSeconds + 3) * 1000;
-  return await new Promise<boolean>((resolveControl) => {
+async function reconcileRemoteSupervisorResult(
+  config: ExecMcpConfig,
+  execId: string,
+  waitSeconds: number
+): Promise<RemoteSupervisorResult | null> {
+  const child = spawnRemoteProcess(config, [
+    'python3', '-c', REMOTE_SUPERVISOR_RECONCILE_PY,
+    execId, String(Math.max(0, waitSeconds))
+  ]);
+  child.stdin.end();
+  const stdout = new RingBuffer(1024 * 1024);
+  const stderr = new RingBuffer(8192);
+  child.stdout.on('data', (chunk: Buffer) => stdout.append(chunk));
+  child.stderr.on('data', (chunk: Buffer) => stderr.append(chunk));
+  const timeoutMs = (config.remote.connectTimeoutSeconds + Math.max(0, waitSeconds) + 3) * 1000;
+  return await new Promise<RemoteSupervisorResult | null>((resolveResult) => {
     let settled = false;
-    const finish = (ok: boolean) => {
+    const finish = (value: RemoteSupervisorResult | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolveControl(ok);
+      resolveResult(value);
     };
     const timer = setTimeout(() => {
       try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {}
-      finish(false);
+      finish(null);
     }, timeoutMs);
     timer.unref?.();
-    child.on('error', () => finish(false));
-    child.on('close', (code) => finish(code === 0));
+    child.on('error', () => finish(null));
+    child.on('close', (code) => {
+      if (code !== 0) return finish(null);
+      try {
+        const result = JSON.parse(stdout.toString()) as RemoteSupervisorResult;
+        if (result.protocol !== REMOTE_SUPERVISOR_PROTOCOL_VERSION
+          || result.exec_id !== execId
+          || !isRemoteOutcomeReason(result.reason)) return finish(null);
+        finish(result);
+      } catch {
+        void stderr;
+        finish(null);
+      }
+    });
   });
+}
+
+function isRemoteOutcomeReason(value: unknown): value is RemoteSupervisorOutcomeReason {
+  return value === 'exit'
+    || value === 'request_timeout'
+    || value === 'manual_cancel'
+    || value === 'mcp_notification_cancel'
+    || value === 'http_disconnect'
+    || value === 'reaper_grace_exceeded'
+    || value === 'executor_shutdown'
+    || value === 'transport_closed'
+    || value === 'supervisor_signal';
+}
+
+function isRemoteTimeout(reason: RemoteSupervisorOutcomeReason): boolean {
+  return reason === 'request_timeout' || reason === 'reaper_grace_exceeded';
+}
+
+function remoteOutcomeAbortReason(reason: RemoteSupervisorOutcomeReason): AbortReason | null {
+  if (reason === 'request_timeout'
+    || reason === 'manual_cancel'
+    || reason === 'mcp_notification_cancel'
+    || reason === 'http_disconnect'
+    || reason === 'reaper_grace_exceeded'
+    || reason === 'executor_shutdown') return reason;
+  return null;
+}
+
+function remoteOutcomeFinalState(reason: RemoteSupervisorOutcomeReason, exitCode: number | null): FinalExecutionState {
+  if (reason === 'request_timeout' || reason === 'reaper_grace_exceeded') return 'timed_out';
+  if (reason === 'manual_cancel' || reason === 'mcp_notification_cancel') return 'cancelled';
+  if (reason === 'http_disconnect') return 'client_closed';
+  if (reason === 'exit') return exitCode === 0 ? 'completed' : 'failed';
+  return 'failed';
+}
+
+function toNodeSignal(value: string | null): NodeJS.Signals | null {
+  if (!value) return null;
+  const allowed = new Set<NodeJS.Signals>([
+    'SIGABRT', 'SIGALRM', 'SIGBUS', 'SIGCHLD', 'SIGCONT', 'SIGFPE', 'SIGHUP', 'SIGILL', 'SIGINT',
+    'SIGIO', 'SIGIOT', 'SIGKILL', 'SIGPIPE', 'SIGPOLL', 'SIGPROF', 'SIGPWR', 'SIGQUIT', 'SIGSEGV',
+    'SIGSTKFLT', 'SIGSTOP', 'SIGSYS', 'SIGTERM', 'SIGTRAP', 'SIGTSTP', 'SIGTTIN', 'SIGTTOU', 'SIGURG',
+    'SIGUSR1', 'SIGUSR2', 'SIGVTALRM', 'SIGWINCH', 'SIGXCPU', 'SIGXFSZ'
+  ]);
+  return allowed.has(value as NodeJS.Signals) ? value as NodeJS.Signals : null;
 }
 
 function shellQuote(value: string): string {

@@ -16,7 +16,7 @@ while (index < args.length) {
   break;
 }
 const command = args.slice(index).join(' ');
-const simulateRemoteIsolation = command.includes("'/bin/sh' '-s'");
+const simulateRemoteIsolation = Boolean(command);
 const child = command
   ? spawn('/bin/sh', ['-c', command], { stdio: ['pipe', 'pipe', 'pipe'], detached: simulateRemoteIsolation })
   : spawn('/bin/sh', ['-s'], { stdio: ['pipe', 'pipe', 'pipe'], detached: simulateRemoteIsolation });
