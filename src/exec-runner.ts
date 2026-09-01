@@ -169,6 +169,9 @@ export class ExecRunner {
   }
 
   start(input: unknown, options: RunOptions = {}): ReturnType<ExecRunner['startResult']> {
+    if (isRecord(input) && input.max_output_bytes !== undefined) {
+      throw new ExecRejectedError('invalid_argument', 'max_output_bytes is only valid for exec; use get_exec_status.max_output_bytes to bound asynchronous log reads');
+    }
     const job = this.submit(input, 'async', () => {}, options);
     return this.startResult(job);
   }

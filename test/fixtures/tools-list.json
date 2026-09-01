@@ -6,7 +6,7 @@
       {
         "name": "begin_task",
         "title": "Begin logical task context",
-        "description": "Call this once before the first exec or start_exec in a new ChatGPT conversation or new logical task. The server returns an opaque task_handle. Reuse that exact task_handle on every subsequent exec and start_exec call that belongs to the same conversation/task. Different ChatGPT windows should create different task handles. This handle is for correlation and Runtime Console grouping; it is not authentication or authorization.",
+        "description": "Create one task context for each independent conversation or logical workstream. Reuse its task_handle for all exec/start_exec calls in that workstream. Do not reuse a task_handle across unrelated tasks. This handle is for correlation and Runtime Console grouping; it is not authentication or authorization.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -44,7 +44,7 @@
             "execution_count": {
               "type": "integer",
               "minimum": 0,
-              "description": "Executions currently associated with this task context."
+              "description": "Number of executions associated with this task context in the current server process."
             }
           },
           "required": [
@@ -106,7 +106,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Additional environment variables. Invalid names are ignored, ENV plus BASH_ENV are removed, and env values are never exposed through job metadata, history, list, or lifecycle logs."
+              "description": "Additional environment variables. Invalid names are ignored; ENV and BASH_ENV are removed. Raw env values are omitted from execution metadata, history, lists, and lifecycle records, and are redacted from retained Job Manager logs. Do not intentionally print secrets: synchronous exec output may contain values emitted by the command."
             },
             "label": {
               "type": "string",
@@ -249,17 +249,12 @@
               "minimum": 1,
               "description": "Maximum runtime after the job starts running. Values above MAX_TIMEOUT_SECONDS are rejected. On expiry, the server sends SIGTERM and then SIGKILL after KILL_GRACE_SECONDS."
             },
-            "max_output_bytes": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "Maximum combined stdout/stderr bytes forwarded by synchronous exec and retained in its final tail. Output beyond this limit is drained but omitted; Job status output uses its own bounded query limit."
-            },
             "env": {
               "type": "object",
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Additional environment variables. Invalid names are ignored, ENV plus BASH_ENV are removed, and env values are never exposed through job metadata, history, list, or lifecycle logs."
+              "description": "Additional environment variables. Invalid names are ignored; ENV and BASH_ENV are removed. Raw env values are omitted from execution metadata, history, lists, and lifecycle records, and are redacted from retained Job Manager logs. Do not intentionally print secrets: synchronous exec output may contain values emitted by the command."
             },
             "label": {
               "type": "string",
@@ -470,12 +465,12 @@
                       "string",
                       "null"
                     ],
-                    "description": "SHA-256 fingerprint of the submitted command, or null when unavailable."
+                    "description": "SHA-256 fingerprint of the validated command after leading/trailing whitespace is trimmed, or null when unavailable."
                   },
                   "command_length": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Submitted command length in UTF-8 bytes."
+                    "description": "Validated command length in UTF-8 bytes after leading/trailing whitespace is trimmed."
                   },
                   "cwd": {
                     "type": [
@@ -740,12 +735,12 @@
                         "string",
                         "null"
                       ],
-                      "description": "SHA-256 fingerprint of the submitted command, or null when unavailable."
+                      "description": "SHA-256 fingerprint of the validated command after leading/trailing whitespace is trimmed, or null when unavailable."
                     },
                     "command_length": {
                       "type": "integer",
                       "minimum": 0,
-                      "description": "Submitted command length in UTF-8 bytes."
+                      "description": "Validated command length in UTF-8 bytes after leading/trailing whitespace is trimmed."
                     },
                     "cwd": {
                       "type": [
@@ -905,12 +900,12 @@
                         "string",
                         "null"
                       ],
-                      "description": "SHA-256 fingerprint of the submitted command, or null."
+                      "description": "SHA-256 fingerprint of the validated command after leading/trailing whitespace is trimmed, or null."
                     },
                     "command_length": {
                       "type": "integer",
                       "minimum": 0,
-                      "description": "Submitted command length in UTF-8 bytes."
+                      "description": "Validated command length in UTF-8 bytes after leading/trailing whitespace is trimmed."
                     },
                     "final_state": {
                       "type": "string",
@@ -953,7 +948,7 @@
                         "string",
                         "null"
                       ],
-                      "description": "UTC timestamp when execution entered running state, or null if it never started."
+                      "description": "Compatibility alias of running_at."
                     },
                     "running_at": {
                       "type": [
@@ -1292,12 +1287,12 @@
                         "string",
                         "null"
                       ],
-                      "description": "SHA-256 fingerprint of the submitted command, or null when unavailable."
+                      "description": "SHA-256 fingerprint of the validated command after leading/trailing whitespace is trimmed, or null when unavailable."
                     },
                     "command_length": {
                       "type": "integer",
                       "minimum": 0,
-                      "description": "Submitted command length in UTF-8 bytes."
+                      "description": "Validated command length in UTF-8 bytes after leading/trailing whitespace is trimmed."
                     },
                     "cwd": {
                       "type": [
@@ -1488,12 +1483,12 @@
                         "string",
                         "null"
                       ],
-                      "description": "SHA-256 fingerprint of the submitted command, or null."
+                      "description": "SHA-256 fingerprint of the validated command after leading/trailing whitespace is trimmed, or null."
                     },
                     "command_length": {
                       "type": "integer",
                       "minimum": 0,
-                      "description": "Submitted command length in UTF-8 bytes."
+                      "description": "Validated command length in UTF-8 bytes after leading/trailing whitespace is trimmed."
                     },
                     "final_state": {
                       "type": "string",
@@ -1536,7 +1531,7 @@
                         "string",
                         "null"
                       ],
-                      "description": "UTC timestamp when execution entered running state, or null if it never started."
+                      "description": "Compatibility alias of running_at."
                     },
                     "running_at": {
                       "type": [
@@ -1778,7 +1773,7 @@
       {
         "name": "import_chatgpt_file",
         "title": "Import ChatGPT file to remote",
-        "description": "Transfer one file from the current ChatGPT session into target_path in the configured remote test environment. Use this tool for ChatGPT-to-remote file transfer instead of exec. ChatGPT supplies an authorized temporary file reference through openai/fileParams. The server downloads into a bounded local spool, computes SHA-256, streams raw bytes through SSH, writes a same-directory temporary file, fsyncs it, verifies the remote size and hash, and atomically commits target_path. An identical existing destination is treated as an idempotent success; different content requires overwrite=true.",
+        "description": "Transfer one file from the current ChatGPT session into target_path in the configured remote execution environment. Use this tool for ChatGPT-to-remote file transfer instead of exec. ChatGPT supplies an authorized temporary file reference through openai/fileParams. The server downloads into a bounded local spool, computes SHA-256, streams raw bytes through SSH, writes a same-directory temporary file, fsyncs it, verifies the remote size and hash, and atomically commits target_path. An identical existing destination is treated as an idempotent success; different content requires overwrite=true.",
         "inputSchema": {
           "type": "object",
           "$defs": {
@@ -1902,7 +1897,7 @@
       {
         "name": "export_remote_file",
         "title": "Export remote file to ChatGPT",
-        "description": "Transfer one allowed regular file from the configured remote test environment into the current ChatGPT session as one embedded MCP binary resource. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns the complete file for host-side materialization into /mnt/data. Remote exports have a hard ceiling of 1.45 MB (1,450,000 bytes); ARTIFACT_EMBED_MAX_BYTES may lower but cannot raise that ceiling. Larger files are rejected with file_too_large, and there is no resource-link or external-URL fallback. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.",
+        "description": "Transfer one allowed regular file from the configured remote execution environment into the current ChatGPT session as one embedded MCP binary resource. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns the complete file for host-side materialization into /mnt/data. Remote exports have a hard ceiling of 1.45 MB (1,450,000 bytes); ARTIFACT_EMBED_MAX_BYTES may lower but cannot raise that ceiling. Larger files are rejected with file_too_large, and there is no resource-link or external-URL fallback. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.",
         "inputSchema": {
           "type": "object",
           "properties": {

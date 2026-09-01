@@ -61,7 +61,8 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.match(tool.inputSchema.properties.shell.description, /Required shell interpreter/);
     assert.match(tool.inputSchema.properties.shell.description, /Bash-specific syntax/);
     assert.match(tool.inputSchema.properties.shell.description, /\/bin\/bash -c/);
-    assert.match(beginTask.description, /Different ChatGPT windows should create different task handles/);
+    assert.match(beginTask.description, /independent conversation or logical workstream/);
+    assert.match(beginTask.outputSchema.properties.execution_count.description, /current server process/);
     assert.match(startExec.description, /registered/);
     assert.match(startExec.description, /queued/);
     assert.match(startExec.description, /runtime is unknown/);
@@ -136,7 +137,13 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.match(tool.inputSchema.properties.cwd.description, /allowlist/);
     assert.match(tool.inputSchema.properties.timeout_seconds.description, /SIGTERM/);
     assert.match(tool.inputSchema.properties.max_output_bytes.description, /omitted/);
-    assert.match(tool.inputSchema.properties.env.description, /BASH_ENV/);
+    assert.equal(startExec.inputSchema.properties.max_output_bytes, undefined);
+    assert.match(tool.inputSchema.properties.env.description, /retained Job Manager logs/);
+    assert.match(tool.inputSchema.properties.env.description, /synchronous exec output may contain values emitted by the command/);
+    assert.match(listActive.outputSchema.properties.tasks.items.properties.command_sha256.description, /validated command/);
+    assert.match(getStatus.outputSchema.oneOf[1].properties.task.properties.started_at.description, /Compatibility alias of running_at/);
+    assert.match(importArtifact.description, /configured remote execution environment/);
+    assert.match(exportArtifact.description, /configured remote execution environment/);
 
     const removedDownload = await mcpCall(base, 2, 'download_file', { path: '/tmp/x' });
     assert.equal(removedDownload.error.code, -32602);
@@ -180,7 +187,18 @@ test('MCP exec call returns structured content matching output schema', async ()
     assert.equal(missingShell.result.structuredContent.code, 'invalid_shell');
     assert.match(missingShell.result.content[0].text, /shell is required/);
 
-    const result = await mcpCall(base, 2, 'exec', {
+    const removedAsyncLimit = await mcpCall(base, 2, 'start_exec', {
+      task_handle: taskHandle,
+      shell: 'sh',
+      command: 'printf should-not-run',
+      cwd: '/tmp',
+      max_output_bytes: 1
+    });
+    assert.equal(removedAsyncLimit.result.isError, true);
+    assert.equal(removedAsyncLimit.result.structuredContent.code, 'invalid_argument');
+    assert.match(removedAsyncLimit.result.content[0].text, /max_output_bytes is only valid for exec/);
+
+    const result = await mcpCall(base, 3, 'exec', {
       task_handle: taskHandle,
       shell: 'sh', command: 'printf hello',
       cwd: '/tmp',

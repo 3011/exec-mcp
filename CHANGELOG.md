@@ -4,6 +4,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-01
+
+### Changed
+
+- Removed `max_output_bytes` from the `start_exec` input contract; asynchronous retained output is controlled by Job Manager retention and bounded per-read through `get_exec_status.max_output_bytes`. Direct `start_exec` calls that still provide the removed argument are rejected.
+- Clarified environment-variable secrecy boundaries: raw values are omitted from metadata/lifecycle records and redacted from retained Job Manager logs, while synchronous command output can still contain values intentionally emitted by the command.
+- Reworded task-context, execution-count, command-fingerprint, timestamp-alias, and artifact-transfer descriptions to match actual process-local and validation semantics.
+
 ## [0.9.0] - 2026-09-01
 
 ### Changed

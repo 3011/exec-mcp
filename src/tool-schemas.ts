@@ -37,17 +37,22 @@ function executionInputProperties() {
     cwd: { type: 'string', description: 'Absolute remote working directory. Its resolved real path must remain inside the ALLOWED_CWDS allowlist. If omitted, DEFAULT_CWD is used.' },
     timeout_seconds: { type: 'integer', minimum: 1, description: 'Maximum runtime after the job starts running. Values above MAX_TIMEOUT_SECONDS are rejected. On expiry, the server sends SIGTERM and then SIGKILL after KILL_GRACE_SECONDS.' },
     max_output_bytes: { type: 'integer', minimum: 1, description: 'Maximum combined stdout/stderr bytes forwarded by synchronous exec and retained in its final tail. Output beyond this limit is drained but omitted; Job status output uses its own bounded query limit.' },
-    env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables. Invalid names are ignored, ENV plus BASH_ENV are removed, and env values are never exposed through job metadata, history, list, or lifecycle logs.' },
+    env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Additional environment variables. Invalid names are ignored; ENV and BASH_ENV are removed. Raw env values are omitted from execution metadata, history, lists, and lifecycle records, and are redacted from retained Job Manager logs. Do not intentionally print secrets: synchronous exec output may contain values emitted by the command.' },
     label: { type: 'string', maxLength: 120, description: 'Optional sanitized operator label for status and lifecycle logs. Do not include credentials or secrets.' },
     task_handle: { type: 'string', pattern: '^task-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$', description: 'Required explicit logical-task handle returned by begin_task. Reuse the same handle for every exec/start_exec call in the same ChatGPT conversation or logical task. Never reuse a handle from another conversation/task.' }
   };
+}
+
+function startExecutionInputProperties() {
+  const { max_output_bytes: _syncResponseLimit, ...properties } = executionInputProperties();
+  return properties;
 }
 
 function beginTaskToolSchema() {
   return {
     name: 'begin_task',
     title: 'Begin logical task context',
-    description: 'Call this once before the first exec or start_exec in a new ChatGPT conversation or new logical task. The server returns an opaque task_handle. Reuse that exact task_handle on every subsequent exec and start_exec call that belongs to the same conversation/task. Different ChatGPT windows should create different task handles. This handle is for correlation and Runtime Console grouping; it is not authentication or authorization.',
+    description: 'Create one task context for each independent conversation or logical workstream. Reuse its task_handle for all exec/start_exec calls in that workstream. Do not reuse a task_handle across unrelated tasks. This handle is for correlation and Runtime Console grouping; it is not authentication or authorization.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -62,7 +67,7 @@ function beginTaskToolSchema() {
         label: { type: ['string', 'null'], description: 'Sanitized task label.' },
         created_at: { type: 'string', description: 'UTC timestamp when the task context was created.' },
         last_attached_at: { type: 'string', description: 'UTC timestamp of the most recent execution association; initially equal to created_at.' },
-        execution_count: { type: 'integer', minimum: 0, description: 'Executions currently associated with this task context.' }
+        execution_count: { type: 'integer', minimum: 0, description: 'Number of executions associated with this task context in the current server process.' }
       },
       required: ['task_handle', 'label', 'created_at', 'last_attached_at', 'execution_count'],
       additionalProperties: false
@@ -113,7 +118,7 @@ function startExecToolSchema() {
     name: 'start_exec',
     title: 'Start asynchronous remote job',
     description: 'Submit one bounded remote command as an asynchronous Job Manager job and return as soon as the job is registered. Every execution must explicitly select shell=sh or shell=bash; use bash for Bash-specific syntax. Task-context rule: before the first execution in a new ChatGPT conversation/logical task, call begin_task once; then reuse its exact task_handle on every exec/start_exec in that same task. Agent selection guidance: prefer start_exec whenever runtime is unknown, may exceed a few seconds, or the command can run in parallel with other useful work. Typical start_exec cases are builds, test suites, package installs, container/image builds, scans, migrations, long scripts, sleeps/waits, and multiple independent jobs. Pass the real foreground command to start_exec; do not add nohup, disown, or shell backgrounding, because Job Manager itself owns the background lifecycle. When starting several independent jobs, use concise labels so their results are easy to reconcile. Do not use start_exec for trivial probes whose result is required immediately; exec is simpler for those. After start_exec returns, keep the exec_id and continue independent reasoning or tool work instead of immediately high-frequency polling. At a synchronization point, call get_exec_status with the returned cursors and optionally wait_seconds up to 30 seconds; use cancel_exec if the job is no longer needed. Returning exec_id means the job is registered and immediately queryable; it does not mean the command succeeded or has started running. Jobs may be queued before entering the async execution pool. Finalized records remain queryable only while bounded Job Manager/history retention keeps them, and in-memory state is lost on service restart.',
-    inputSchema: { type: 'object', properties: executionInputProperties(), required: ['command', 'shell', 'task_handle'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: startExecutionInputProperties(), required: ['command', 'shell', 'task_handle'], additionalProperties: false },
     outputSchema: {
       type: 'object',
       properties: {
@@ -146,8 +151,8 @@ function activeExecutionSchema() {
       task_handle: { type: ['string', 'null'], description: 'Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution.' },
       label: { type: ['string', 'null'], description: 'Optional sanitized operator label.' },
       command_preview: { type: ['string', 'null'], description: 'Optional redacted command preview when explicitly enabled; otherwise null.' },
-      command_sha256: { type: ['string', 'null'], description: 'SHA-256 fingerprint of the submitted command, or null when unavailable.' },
-      command_length: { type: 'integer', minimum: 0, description: 'Submitted command length in UTF-8 bytes.' },
+      command_sha256: { type: ['string', 'null'], description: 'SHA-256 fingerprint of the validated command after leading/trailing whitespace is trimmed, or null when unavailable.' },
+      command_length: { type: 'integer', minimum: 0, description: 'Validated command length in UTF-8 bytes after leading/trailing whitespace is trimmed.' },
       cwd: { type: ['string', 'null'], description: 'Validated remote working directory.' },
       timeout_seconds: { type: 'integer', minimum: 1, description: 'Configured runtime timeout.' },
       elapsed_seconds: { type: 'integer', minimum: 0, description: 'Whole seconds elapsed since Job Manager registration.' },
@@ -176,13 +181,13 @@ function executionHistorySchema() {
       execution_class: { type: 'string', enum: executionClassValues, description: 'Admission class used by this job.' },
       task_handle: { type: ['string', 'null'], description: 'Logical task handle for Runtime Console grouping, or null for legacy/non-MCP execution.' },
       label: { type: ['string', 'null'], description: 'Optional sanitized operator label.' },
-      command_sha256: { type: ['string', 'null'], description: 'SHA-256 fingerprint of the submitted command, or null.' },
-      command_length: { type: 'integer', minimum: 0, description: 'Submitted command length in UTF-8 bytes.' },
+      command_sha256: { type: ['string', 'null'], description: 'SHA-256 fingerprint of the validated command after leading/trailing whitespace is trimmed, or null.' },
+      command_length: { type: 'integer', minimum: 0, description: 'Validated command length in UTF-8 bytes after leading/trailing whitespace is trimmed.' },
       final_state: { type: 'string', enum: finalExecutionStateValues, description: 'Detailed final execution lifecycle state.' },
       abort_reason: { enum: [...abortReasonValues, null], description: 'First accepted abort reason, or null.' },
       abort_source: { type: ['string', 'null'], description: 'Subsystem that requested the abort, or null.' },
       created_at: { type: 'string', description: 'UTC timestamp when the Job Manager registered the job.' },
-      started_at: { type: ['string', 'null'], description: 'UTC timestamp when execution entered running state, or null if it never started.' },
+      started_at: { type: ['string', 'null'], description: 'Compatibility alias of running_at.' },
       running_at: { type: ['string', 'null'], description: 'UTC timestamp when execution entered running state, or null if it never started.' },
       finished_at: { type: 'string', description: 'UTC timestamp when runner finalization completed.' },
       duration_ms: { type: 'integer', minimum: 0, description: 'Observed duration from acceptance through finalization.' },
@@ -372,7 +377,7 @@ function importChatgptFileToolSchema() {
   return {
     name: 'import_chatgpt_file',
     title: 'Import ChatGPT file to remote',
-    description: 'Transfer one file from the current ChatGPT session into target_path in the configured remote test environment. Use this tool for ChatGPT-to-remote file transfer instead of exec. ChatGPT supplies an authorized temporary file reference through openai/fileParams. The server downloads into a bounded local spool, computes SHA-256, streams raw bytes through SSH, writes a same-directory temporary file, fsyncs it, verifies the remote size and hash, and atomically commits target_path. An identical existing destination is treated as an idempotent success; different content requires overwrite=true.',
+    description: 'Transfer one file from the current ChatGPT session into target_path in the configured remote execution environment. Use this tool for ChatGPT-to-remote file transfer instead of exec. ChatGPT supplies an authorized temporary file reference through openai/fileParams. The server downloads into a bounded local spool, computes SHA-256, streams raw bytes through SSH, writes a same-directory temporary file, fsyncs it, verifies the remote size and hash, and atomically commits target_path. An identical existing destination is treated as an idempotent success; different content requires overwrite=true.',
     inputSchema: {
       type: 'object',
       $defs: { OpenAIFile: openAIFileSchema() },
@@ -412,7 +417,7 @@ function exportRemoteFileToolSchema() {
   return {
     name: 'export_remote_file',
     title: 'Export remote file to ChatGPT',
-    description: 'Transfer one allowed regular file from the configured remote test environment into the current ChatGPT session as one embedded MCP binary resource. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns the complete file for host-side materialization into /mnt/data. Remote exports have a hard ceiling of 1.45 MB (1,450,000 bytes); ARTIFACT_EMBED_MAX_BYTES may lower but cannot raise that ceiling. Larger files are rejected with file_too_large, and there is no resource-link or external-URL fallback. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.',
+    description: 'Transfer one allowed regular file from the configured remote execution environment into the current ChatGPT session as one embedded MCP binary resource. The server streams raw bytes over SSH into a bounded local spool, verifies size and SHA-256, and returns the complete file for host-side materialization into /mnt/data. Remote exports have a hard ceiling of 1.45 MB (1,450,000 bytes); ARTIFACT_EMBED_MAX_BYTES may lower but cannot raise that ceiling. Larger files are rejected with file_too_large, and there is no resource-link or external-URL fallback. The embedded blob is Base64 only at the MCP protocol layer; the model does not need to copy or decode it.',
     inputSchema: {
       type: 'object',
       properties: {

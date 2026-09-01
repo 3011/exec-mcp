@@ -45,7 +45,7 @@ The control-plane tools are operator-wide. They assume one trusted tenant and ar
 
 ### Explicit task context
 
-MCP protocol sessions are not treated as ChatGPT conversation identity. Before the first `exec` or `start_exec` in a new ChatGPT conversation or new logical task, call `begin_task` once. The server returns an opaque `task-...` handle; reuse that exact handle on every subsequent `exec` and `start_exec` in the same task. Different ChatGPT windows should create different handles.
+MCP protocol sessions are not treated as ChatGPT conversation identity. Create one task context for each independent conversation or logical workstream. Reuse its `task_handle` for all `exec`/`start_exec` calls in that workstream, and do not reuse a handle across unrelated tasks.
 
 `exec` and `start_exec` require a server-issued handle at the MCP schema and runtime-validation layers. An unknown or invented handle is rejected with `unknown_task_handle`, which instructs the caller to run `begin_task`. `get_exec_status` and `cancel_exec` need only `exec_id`; task ownership is already stored with the execution. The handle is correlation metadata only and grants no authorization. Task contexts are bounded and process-local, matching the existing Runtime/Job Manager retention model.
 
