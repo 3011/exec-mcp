@@ -9,6 +9,7 @@ export interface RemoteSupervisorConfig {
   protocol: 1;
   exec_id: string;
   command: string;
+  shell: 'sh' | 'bash';
   cwd: string;
   timeout_seconds: number;
   kill_grace_seconds: number;
@@ -317,6 +318,10 @@ try:
     remove_result_journal(base, exec_id)
     cwd = safe_real_cwd(str(cfg['cwd']), list(cfg.get('allowed_cwds') or []))
     command = str(cfg['command'])
+    shell = str(cfg['shell'])
+    if shell not in ('sh', 'bash'):
+        fatal('protocol_error', 'unsupported shell', 126)
+    shell_path = '/bin/bash' if shell == 'bash' else '/bin/sh'
     timeout_seconds = float(cfg['timeout_seconds'])
     grace = max(0.1, float(cfg['kill_grace_seconds']))
     env = os.environ.copy()
@@ -330,7 +335,7 @@ except Exception as exc:
 
 try:
     child = subprocess.Popen(
-        ['/bin/sh', '-c', command], cwd=cwd, env=env,
+        [shell_path, '-c', command], cwd=cwd, env=env,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         start_new_session=True, bufsize=0, close_fds=True
     )

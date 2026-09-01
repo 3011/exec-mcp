@@ -21,7 +21,7 @@ remote Python supervisor
         |
         | isolated process group
         v
-non-interactive /bin/sh -c command
+non-interactive command via required explicit sh|bash interpreter
 ```
 
 The implementation is written in strict TypeScript, compiles to JavaScript for Node.js, and uses Node.js core modules only at runtime. Runtime state is in memory and is lost on restart.
@@ -57,6 +57,7 @@ Example request:
 ```json
 {
   "command": "git status --short",
+  "shell": "sh",
   "cwd": "/workspace",
   "timeout_seconds": 120,
   "max_output_bytes": 5242880,

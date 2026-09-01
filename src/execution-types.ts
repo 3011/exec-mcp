@@ -6,8 +6,11 @@ import type { TaskContext } from './task-context.js';
 type EventPayload = { type: string; [key: string]: unknown };
 export type ExecEvent = EventPayload & { exec_id: string };
 
+export type ExecutionShell = 'sh' | 'bash';
+
 export interface ExecutionSpec {
   command: string;
+  shell: ExecutionShell;
   cwd: string;
   timeoutSeconds: number;
   maxOutputBytes: number;

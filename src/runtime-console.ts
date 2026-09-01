@@ -909,6 +909,7 @@ const RUNTIME_JS = `
 
     append(card,
       command,
+      metaLine('Shell', observation.shell || 'Unavailable'),
       metaLine('Task', taskContext.label || (task.task_handle ? 'Explicit task context' : 'Ungrouped / legacy')),
       metaLine('Origin', origin ? ((origin.kind === 'mcp' ? 'MCP' : origin.kind) + (origin.tool ? ' · ' + origin.tool : '')) : 'Unavailable'),
       copyableMetaLine('Execution', task.exec_id || observation.exec_id),

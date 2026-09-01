@@ -24,20 +24,50 @@ function makeRunner(overrides = {}) {
 test('timeout above hard maximum is rejected before spawn', () => {
   const runner = makeRunner();
   assert.throws(
-    () => runner.validate({ command: 'echo ok', cwd: '/tmp', timeout_seconds: 999 }),
+    () => runner.validate({ shell: 'sh', command: 'echo ok', cwd: '/tmp', timeout_seconds: 999 }),
     (err) => err instanceof ExecRejectedError && err.code === 'timeout_too_large'
   );
 });
 
 test('zero and negative timeouts are rejected', () => {
   const runner = makeRunner();
-  assert.throws(() => runner.validate({ command: 'echo ok', cwd: '/tmp', timeout_seconds: 0 }), (err) => err.code === 'invalid_timeout');
-  assert.throws(() => runner.validate({ command: 'echo ok', cwd: '/tmp', timeout_seconds: -1 }), (err) => err.code === 'invalid_timeout');
+  assert.throws(() => runner.validate({ shell: 'sh', command: 'echo ok', cwd: '/tmp', timeout_seconds: 0 }), (err) => err.code === 'invalid_timeout');
+  assert.throws(() => runner.validate({ shell: 'sh', command: 'echo ok', cwd: '/tmp', timeout_seconds: -1 }), (err) => err.code === 'invalid_timeout');
+});
+
+test('shell is required, accepts only sh or bash, and does not change command fingerprint', () => {
+  const runner = makeRunner();
+  assert.throws(
+    () => runner.validate({ command: 'echo ok', cwd: '/tmp' }),
+    (err) => err instanceof ExecRejectedError && err.code === 'invalid_shell'
+  );
+  const sh = runner.validate({ command: 'echo ok', shell: 'sh', cwd: '/tmp' });
+  const bash = runner.validate({ command: 'echo ok', shell: 'bash', cwd: '/tmp' });
+  assert.equal(sh.shell, 'sh');
+  assert.equal(bash.shell, 'bash');
+  assert.equal(sh.commandSha256, bash.commandSha256);
+  assert.throws(
+    () => runner.validate({ command: 'echo ok', shell: 'zsh', cwd: '/tmp' }),
+    (err) => err instanceof ExecRejectedError && err.code === 'invalid_shell'
+  );
+});
+
+test('bash shell executes Bash-specific syntax without a nested bash -c wrapper', async () => {
+  const runner = makeRunner();
+  const events = [];
+  const summary = await runner.run({
+    command: 'value=banana; printf "%s" "${value//a/x}"',
+    shell: 'bash',
+    cwd: '/tmp'
+  }, (event) => events.push(event));
+  assert.equal(summary.code, 0);
+  const stdout = events.filter((e) => e.type === 'stdout').map((e) => e.data).join('');
+  assert.equal(stdout, 'bxnxnx');
 });
 
 test('command metadata is fingerprinted without exposing command by default', () => {
   const runner = makeRunner();
-  const req = runner.validate({ command: "docker login -p 'secret value'", label: 'build\npassword=hunter2', cwd: '/tmp' });
+  const req = runner.validate({ shell: 'sh', command: "docker login -p 'secret value'", label: 'build\npassword=hunter2', cwd: '/tmp' });
   assert.equal(req.commandPreview, null);
   assert.equal(req.commandSha256.length, 64);
   assert.equal(req.label.includes('hunter2'), false);
@@ -46,7 +76,7 @@ test('command metadata is fingerprinted without exposing command by default', ()
 
 test('optional command preview redacts common CLI and URL credentials', () => {
   const runner = makeRunner({ EXPOSE_REDACTED_COMMAND_PREVIEW: 'true' });
-  const req = runner.validate({ command: "docker login -p 'secret value'; curl 'https://user:token@example.com'", cwd: '/tmp' });
+  const req = runner.validate({ shell: 'sh', command: "docker login -p 'secret value'; curl 'https://user:token@example.com'", cwd: '/tmp' });
   assert.equal(req.commandPreview.includes('secret value'), false);
   assert.equal(req.commandPreview.includes('user:token@'), false);
   assert.match(req.commandPreview, /REDACTED/);
@@ -55,7 +85,7 @@ test('optional command preview redacts common CLI and URL credentials', () => {
 test('output limit above hard maximum is rejected before spawn', () => {
   const runner = makeRunner();
   assert.throws(
-    () => runner.validate({ command: 'echo ok', cwd: '/tmp', max_output_bytes: 999999 }),
+    () => runner.validate({ shell: 'sh', command: 'echo ok', cwd: '/tmp', max_output_bytes: 999999 }),
     (err) => err instanceof ExecRejectedError && err.code === 'output_limit_too_large'
   );
 });
@@ -63,7 +93,7 @@ test('output limit above hard maximum is rejected before spawn', () => {
 test('relative cwd is rejected before spawn', () => {
   const runner = makeRunner();
   assert.throws(
-    () => runner.validate({ command: 'echo ok', cwd: 'relative/path' }),
+    () => runner.validate({ shell: 'sh', command: 'echo ok', cwd: 'relative/path' }),
     (err) => err instanceof ExecRejectedError
       && err.code === 'invalid_cwd'
       && /absolute path/.test(err.message)
@@ -74,7 +104,7 @@ test('invalid env names are ignored and valid env names are passed', async () =>
   const runner = makeRunner();
   const events = [];
   const summary = await runner.run({
-    command: 'printf "%s:%s" "$GOOD_ENV" "$BAD-NAME"',
+    shell: 'sh', command: 'printf "%s:%s" "$GOOD_ENV" "$BAD-NAME"',
     cwd: '/tmp',
     env: { GOOD_ENV: 'yes', 'BAD-NAME': 'no' }
   }, (event) => events.push(event));
@@ -86,7 +116,7 @@ test('invalid env names are ignored and valid env names are passed', async () =>
 test('stderr output with exit code 0 is not treated as runner failure', async () => {
   const runner = makeRunner();
   const events = [];
-  const summary = await runner.run({ command: 'echo warning >&2; exit 0', cwd: '/tmp' }, (event) => events.push(event));
+  const summary = await runner.run({ shell: 'sh', command: 'echo warning >&2; exit 0', cwd: '/tmp' }, (event) => events.push(event));
   assert.equal(summary.code, 0);
   assert.equal(summary.stderr_bytes > 0, true);
   assert.equal(events.some((e) => e.type === 'stderr'), true);
@@ -95,7 +125,7 @@ test('stderr output with exit code 0 is not treated as runner failure', async ()
 test('non-zero exit code is surfaced in exit summary', async () => {
   const runner = makeRunner();
   const events = [];
-  const summary = await runner.run({ command: 'echo boom >&2; exit 7', cwd: '/tmp' }, (event) => events.push(event));
+  const summary = await runner.run({ shell: 'sh', command: 'echo boom >&2; exit 7', cwd: '/tmp' }, (event) => events.push(event));
   assert.equal(summary.code, 7);
   assert.equal(events.at(-1).type, 'exit');
   assert.equal(events.at(-1).code, 7);
@@ -105,7 +135,7 @@ test('secret redaction applies to streamed data and tail summaries', async () =>
   const runner = makeRunner({ DEFAULT_MAX_OUTPUT_BYTES: '4096', HARD_MAX_OUTPUT_BYTES: '4096' });
   const events = [];
   const summary = await runner.run({
-    command: 'echo "Authorization: Bearer abc.def"; echo "password: hunter2" >&2',
+    shell: 'sh', command: 'echo "Authorization: Bearer abc.def"; echo "password: hunter2" >&2',
     cwd: '/tmp'
   }, (event) => events.push(event));
   assert.equal(summary.code, 0);
@@ -118,9 +148,9 @@ test('secret redaction applies to streamed data and tail summaries', async () =>
 
 test('sync concurrency limit queues extra executions instead of rejecting them', async () => {
   const runner = makeRunner({ MAX_CONCURRENT_EXECS: '1', DEFAULT_TIMEOUT_SECONDS: '5' });
-  const first = runner.run({ command: 'sleep 0.3', cwd: '/tmp' }, () => {});
+  const first = runner.run({ shell: 'sh', command: 'sleep 0.3', cwd: '/tmp' }, () => {});
   await new Promise((resolve) => setTimeout(resolve, 50));
-  const second = runner.run({ command: 'echo second', cwd: '/tmp' }, () => {});
+  const second = runner.run({ shell: 'sh', command: 'echo second', cwd: '/tmp' }, () => {});
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(runner.active, 1);
   assert.equal(runner.queued, 1);
@@ -133,7 +163,7 @@ test('ENV and BASH_ENV are removed before spawning shell', async () => {
   const runner = makeRunner();
   const events = [];
   const summary = await runner.run({
-    command: 'printf "%s:%s:%s" "$ENV" "$BASH_ENV" "$EXEC_MCP_CUSTOM"',
+    shell: 'sh', command: 'printf "%s:%s:%s" "$ENV" "$BASH_ENV" "$EXEC_MCP_CUSTOM"',
     cwd: '/tmp',
     env: {
       ENV: '/tmp/should_be_removed',

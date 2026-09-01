@@ -58,7 +58,7 @@ fi
 REQUEST_BODY=$(node -e '
 const bytes = Number(process.argv[1]);
 const command = `python3 -c "import os,sys; os.set_blocking(sys.stdout.fileno(), True); sys.stdout.buffer.write(b\x27x\x27 * ${bytes})"`;
-process.stdout.write(JSON.stringify({ command, cwd: "/tmp", max_output_bytes: 1024 }));
+process.stdout.write(JSON.stringify({ command, shell: "sh", cwd: "/tmp", max_output_bytes: 1024 }));
 ' "$OUTPUT_BYTES")
 
 BEFORE_RSS=$(read_rss_kib)

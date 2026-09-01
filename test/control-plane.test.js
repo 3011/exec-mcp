@@ -73,8 +73,8 @@ test('batch rejects execution tools but permits control tools', async () => {
     const response = await fetch(`${base}/mcp`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify([
-        { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'exec', arguments: { command: 'true' } } },
-        { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'start_exec', arguments: { command: 'true' } } },
+        { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'exec', arguments: { shell: 'sh', command: 'true' } } },
+        { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'start_exec', arguments: { shell: 'sh', command: 'true' } } },
         { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_active_execs', arguments: {} } }
       ])
     });
@@ -101,8 +101,8 @@ test('numeric and string request ids use distinct request registry keys', async 
 
 test('MCP cancelled notification aborts only the matching session request', async () => {
   await withServer({ MAX_CONCURRENT_EXECS: '2', KILL_GRACE_SECONDS: '1' }, async (base, { runner, mcpRequests }) => {
-    const first = mcp(base, 1, 'exec', { command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 }, { 'mcp-session-id': 'session-a' });
-    const second = mcp(base, 1, 'exec', { command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 }, { 'mcp-session-id': 'session-b' });
+    const first = mcp(base, 1, 'exec', { shell: 'sh', command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 }, { 'mcp-session-id': 'session-a' });
+    const second = mcp(base, 1, 'exec', { shell: 'sh', command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 }, { 'mcp-session-id': 'session-b' });
     await waitFor(() => mcpRequests.size === 2 && runner.active === 2);
 
     await fetch(`${base}/mcp`, {
@@ -128,7 +128,7 @@ test('MCP HTTP disconnect propagates abort and cleans request mapping', async ()
     const request = fetch(`${base}/mcp`, {
       method: 'POST', signal: controller.signal,
       headers: { 'content-type': 'application/json', 'mcp-session-id': 'disconnect-session' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'exec', arguments: { task_handle: taskHandle, command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 } } })
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'exec', arguments: { task_handle: taskHandle, shell: 'sh', command: 'sleep 30', cwd: '/tmp', timeout_seconds: 30 } } })
     });
     await waitFor(() => runner.active === 1 && mcpRequests.size === 1);
     controller.abort();

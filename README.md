@@ -148,6 +148,7 @@ curl -fsS http://127.0.0.1:8080/mcp \
 ```json
 {
   "command": "git status --short",
+  "shell": "sh",
   "cwd": "/workspace",
   "timeout_seconds": 120,
   "max_output_bytes": 5242880,
@@ -158,7 +159,7 @@ curl -fsS http://127.0.0.1:8080/mcp \
 }
 ```
 
-Commands are evaluated by `/bin/sh -c` on the configured remote host. The caller is intentionally allowed to supply arbitrary shell text; authorization must therefore happen before requests reach this service.
+Every command must explicitly select `shell: "sh"` or `shell: "bash"`. `sh` uses `/bin/sh -c`; `bash` uses `/bin/bash -c` for Bash-specific syntax. No default shell is applied, only these two interpreters are supported, and login/interactive shells are never used. The caller is intentionally allowed to supply arbitrary shell text; authorization must therefore happen before requests reach this service.
 
 ### Output semantics
 

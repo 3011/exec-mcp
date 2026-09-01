@@ -39,13 +39,13 @@ test('timeout kills the whole process group including background child', async (
   const marker = `/tmp/exec-mcp-pg-${process.pid}-${Date.now()}`;
   const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '2' });
   const summary = await runner.run({
-    command: `sh -c 'sleep 3; touch ${marker}' & wait`,
+    shell: 'sh', command: `sh -c 'sleep 3; touch ${marker}' & wait`,
     cwd: '/tmp',
     timeout_seconds: 1
   }, () => {});
   assert.equal(summary.timed_out, true);
   await new Promise((resolve) => setTimeout(resolve, 3500));
-  const check = await runner.run({ command: `[ ! -e ${marker} ]`, cwd: '/tmp' }, () => {});
+  const check = await runner.run({ shell: 'sh', command: `[ ! -e ${marker} ]`, cwd: '/tmp' }, () => {});
   assert.equal(check.code, 0, 'background process should not survive timeout');
 });
 
@@ -55,7 +55,7 @@ test('timeout kills a foreground child process that ignores SIGTERM', async () =
   const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root, DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '2' });
   try {
     const summary = await runner.run({
-      command: `python3 -c "import os, signal, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)" ${pidFile}`,
+      shell: 'sh', command: `python3 -c "import os, signal, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)" ${pidFile}`,
       cwd: root,
       timeout_seconds: 1
     }, () => {});
@@ -73,7 +73,7 @@ test('timeout kills a background child process', async () => {
   const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root, DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '2' });
   try {
     const summary = await runner.run({
-      command: `sleep 60 & echo $! > ${pidFile}; wait`,
+      shell: 'sh', command: `sleep 60 & echo $! > ${pidFile}; wait`,
       cwd: root,
       timeout_seconds: 1
     }, () => {});
@@ -91,7 +91,7 @@ test('normal command exit cleans up leftover background process group members', 
   const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root });
   try {
     const summary = await runner.run({
-      command: `sleep 60 & echo $! > ${pidFile}; printf done`,
+      shell: 'sh', command: `sleep 60 & echo $! > ${pidFile}; printf done`,
       cwd: root
     }, () => {});
     assert.equal(summary.code, 0);
@@ -110,7 +110,7 @@ test('cwd symlink realpath must remain inside allowlist', async () => {
   try {
     const events = [];
     const summary = await runner.run({
-      command: 'pwd -P',
+      shell: 'sh', command: 'pwd -P',
       cwd: link
     }, (event) => events.push(event));
     assert.notEqual(summary.code, 0);
@@ -124,7 +124,7 @@ test('large output is drained, counted, truncated, and tail is bounded', async (
   const runner = makeRunner({ DEFAULT_MAX_OUTPUT_BYTES: '1024', HARD_MAX_OUTPUT_BYTES: '2048', RING_BUFFER_BYTES: '32' });
   const events = [];
   const summary = await runner.run({
-    command: `python3 -c "import sys; sys.stdout.write('x' * 100000)"`,
+    shell: 'sh', command: `python3 -c "import sys; sys.stdout.write('x' * 100000)"`,
     cwd: '/tmp',
     max_output_bytes: 1024
   }, (event) => events.push(event));
@@ -140,7 +140,7 @@ test('large output is drained, counted, truncated, and tail is bounded', async (
 test('tail summary is capped by max_output_bytes even when ring buffer is larger', async () => {
   const runner = makeRunner({ DEFAULT_MAX_OUTPUT_BYTES: '1024', HARD_MAX_OUTPUT_BYTES: '2048', RING_BUFFER_BYTES: '65536' });
   const summary = await runner.run({
-    command: `python3 -c "import sys; sys.stdout.write('x' * 37000)"`,
+    shell: 'sh', command: `python3 -c "import sys; sys.stdout.write('x' * 37000)"`,
     cwd: '/tmp',
     max_output_bytes: 1024
   }, () => {});
@@ -153,7 +153,7 @@ test('tail summary is capped by max_output_bytes even when ring buffer is larger
 test('combined stdout and stderr tails are capped by max_output_bytes', async () => {
   const runner = makeRunner({ DEFAULT_MAX_OUTPUT_BYTES: '1024', HARD_MAX_OUTPUT_BYTES: '2048', RING_BUFFER_BYTES: '65536' });
   const summary = await runner.run({
-    command: `python3 -c "import sys; sys.stdout.write('o' * 2000); sys.stderr.write('e' * 2000)"`,
+    shell: 'sh', command: `python3 -c "import sys; sys.stdout.write('o' * 2000); sys.stderr.write('e' * 2000)"`,
     cwd: '/tmp',
     max_output_bytes: 1024
   }, () => {});
@@ -168,7 +168,7 @@ test('stdout and stderr events carry monotonically increasing sequence numbers',
   const runner = makeRunner();
   const events = [];
   const summary = await runner.run({
-    command: 'echo one; echo two >&2; echo three',
+    shell: 'sh', command: 'echo one; echo two >&2; echo three',
     cwd: '/tmp'
   }, (event) => events.push(event));
   assert.equal(summary.code, 0);
@@ -180,7 +180,7 @@ test('stdout and stderr events carry monotonically increasing sequence numbers',
 test('heartbeat events include byte counters while command is running', async () => {
   const runner = makeRunner({ HEARTBEAT_SECONDS: '1', DEFAULT_TIMEOUT_SECONDS: '4' });
   const events = [];
-  const summary = await runner.run({ command: 'printf start; sleep 2; printf end', cwd: '/tmp' }, (event) => events.push(event));
+  const summary = await runner.run({ shell: 'sh', command: 'printf start; sleep 2; printf end', cwd: '/tmp' }, (event) => events.push(event));
   assert.equal(summary.code, 0);
   const heartbeats = events.filter((e) => e.type === 'heartbeat');
   assert.equal(heartbeats.length >= 1, true);
@@ -203,7 +203,7 @@ test('manual cancel kills the whole async process group including background chi
   const runner = makeRunner({ ALLOWED_CWDS: root, DEFAULT_CWD: root, DEFAULT_TIMEOUT_SECONDS: '5' });
   try {
     const started = runner.start({
-      command: `sleep 60 & echo $! > ${pidFile}; wait`,
+      shell: 'sh', command: `sleep 60 & echo $! > ${pidFile}; wait`,
       cwd: root,
       timeout_seconds: 5,
       label: 'cancel-process-group'
@@ -231,7 +231,7 @@ test('manual cancel prevents a detached background marker from firing after tran
   const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '5', MAX_TIMEOUT_SECONDS: '6' });
   try {
     const started = runner.start({
-      command: `sh -c '(sleep 2; touch ${marker}) & wait'`,
+      shell: 'sh', command: `sh -c '(sleep 2; touch ${marker}) & wait'`,
       cwd: '/tmp',
       timeout_seconds: 5,
       label: 'cancel-marker-regression'
@@ -260,7 +260,7 @@ test('remote supervisor decision updates live timeout state before termination f
   const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '4', KILL_GRACE_SECONDS: '2' });
   try {
     const started = runner.start({
-      command: `python3 -c "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10)"`,
+      shell: 'sh', command: `python3 -c "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10)"`,
       cwd: '/tmp',
       timeout_seconds: 1,
       label: 'authoritative-timeout-decision'
@@ -295,7 +295,7 @@ test('remote supervisor decision updates live timeout state before termination f
 test('remote supervisor timeout remains authoritative while the local event loop is stalled', async () => {
   const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '1', MAX_TIMEOUT_SECONDS: '2' });
   try {
-    const execution = runner.run({ command: 'sleep 5', cwd: '/tmp', timeout_seconds: 1 }, () => {});
+    const execution = runner.run({ shell: 'sh', command: 'sleep 5', cwd: '/tmp', timeout_seconds: 1 }, () => {});
     await new Promise((resolve) => setTimeout(resolve, 250));
 
     const blockedUntil = Date.now() + 2200;
@@ -319,7 +319,7 @@ test('remote supervisor timeout remains authoritative while the local event loop
 test('a command that exits 143 by itself is a normal failed exit, not a timeout', async () => {
   const runner = makeRunner();
   try {
-    const summary = await runner.run({ command: 'exit 143', cwd: '/tmp', timeout_seconds: 2 }, () => {});
+    const summary = await runner.run({ shell: 'sh', command: 'exit 143', cwd: '/tmp', timeout_seconds: 2 }, () => {});
     assert.equal(summary.code, 143);
     assert.equal(summary.timed_out, false);
     const record = runner.registry.recent.at(-1);
@@ -360,7 +360,7 @@ test('remote supervisor deadline is independent of stdout backpressure', async (
   child.stdin.write(encodeSupervisorConfig({
     protocol: REMOTE_SUPERVISOR_PROTOCOL_VERSION,
     exec_id: execId,
-    command: `python3 -c 'import os; b=b"x"*65536\nwhile True: os.write(1,b)'`,
+    shell: 'sh', command: `python3 -c 'import os; b=b"x"*65536\nwhile True: os.write(1,b)'`,
     cwd: '/tmp',
     timeout_seconds: 1,
     kill_grace_seconds: 1,
@@ -390,7 +390,7 @@ test('remote supervisor deadline is independent of stdout backpressure', async (
 test('normal supervisor result is acknowledged and leaves no result journal', async () => {
   const runner = makeRunner();
   try {
-    const summary = await runner.run({ command: 'printf journal-ok', cwd: '/tmp' }, () => {});
+    const summary = await runner.run({ shell: 'sh', command: 'printf journal-ok', cwd: '/tmp' }, () => {});
     assert.equal(summary.code, 0);
     const path = `/tmp/exec-mcp-runtime-results-${process.geteuid()}/${summary.exec_id}.json`;
     assert.equal(existsSync(path), false, 'ACK should remove the durable result journal on the normal path');
@@ -404,7 +404,7 @@ test('lost SSH transport reconciles the durable remote result and kills the comm
   const runner = makeRunner({ DEFAULT_TIMEOUT_SECONDS: '10', MAX_TIMEOUT_SECONDS: '10' });
   try {
     const started = runner.start({
-      command: `sleep 2; touch ${marker}`,
+      shell: 'sh', command: `sleep 2; touch ${marker}`,
       cwd: '/tmp',
       timeout_seconds: 10,
       label: 'transport-loss-reconcile'

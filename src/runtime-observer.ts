@@ -59,6 +59,7 @@ export interface RuntimeExecutionObservation {
   execution_class: ExecutionClass | null;
   label: string | null;
   cwd: string | null;
+  shell: 'sh' | 'bash' | null;
   command_preview: string | null;
   command_sha256: string | null;
   command_length: number;
@@ -79,6 +80,7 @@ interface MutableObservation {
   executionClass: ExecutionClass | null;
   label: string | null;
   cwd: string | null;
+  shell: 'sh' | 'bash' | null;
   commandPreview: string | null;
   commandSha256: string | null;
   commandLength: number;
@@ -115,6 +117,7 @@ export class RuntimeObserver {
     executionClass?: ExecutionClass;
     label?: string | null;
     cwd?: string | null;
+    shell?: 'sh' | 'bash';
     commandPreview?: string | null;
     commandSha256?: string | null;
     commandLength?: number;
@@ -146,6 +149,7 @@ export class RuntimeObserver {
       executionClass: input.executionClass ?? null,
       label: input.label ?? null,
       cwd: input.cwd ?? null,
+      shell: input.shell ?? null,
       commandPreview: input.commandPreview ?? null,
       commandSha256: input.commandSha256 ?? null,
       commandLength: input.commandLength ?? 0,
@@ -297,6 +301,7 @@ function publicObservation(observation: MutableObservation): RuntimeExecutionObs
     execution_class: observation.executionClass,
     label: observation.label,
     cwd: observation.cwd,
+    shell: observation.shell,
     command_preview: observation.commandPreview,
     command_sha256: observation.commandSha256,
     command_length: observation.commandLength,

@@ -53,7 +53,7 @@ test('HTTP request body over 1 MiB returns 413', async () => {
     const resp = await fetch(`${base}/exec`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ command: 'echo ok', cwd: '/tmp', padding: 'x'.repeat(1024 * 1024) })
+      body: JSON.stringify({ shell: 'sh', command: 'echo ok', cwd: '/tmp', padding: 'x'.repeat(1024 * 1024) })
     });
     assert.equal(resp.status, 413);
     assert.equal((await resp.json()).error, 'body_too_large');
@@ -65,7 +65,7 @@ test('HTTP SSE final exit contains graceful-degradation tail summary', async () 
     const resp = await fetch(`${base}/exec`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ command: 'printf abcdefghijklmnopqrstuvwxyz', cwd: '/tmp', max_output_bytes: 10 })
+      body: JSON.stringify({ shell: 'sh', command: 'printf abcdefghijklmnopqrstuvwxyz', cwd: '/tmp', max_output_bytes: 10 })
     });
     const events = parseSse(await resp.text());
     const exit = events.at(-1);
@@ -81,13 +81,13 @@ test('HTTP sync execution queues when its admission pool is full', async () => {
     const first = fetch(base + '/exec', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ command: 'sleep 0.5', cwd: '/tmp' })
+      body: JSON.stringify({ shell: 'sh', command: 'sleep 0.5', cwd: '/tmp' })
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     const second = fetch(base + '/exec', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ command: 'echo second', cwd: '/tmp' })
+      body: JSON.stringify({ shell: 'sh', command: 'echo second', cwd: '/tmp' })
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(runner.active, 1);

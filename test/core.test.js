@@ -23,7 +23,7 @@ test('validate rejects cwd outside allowlist', () => {
   const config = parseConfig({ ALLOWED_CWDS: '/tmp', DEFAULT_CWD: '/tmp' });
   const runner = new ExecRunner(config);
   assert.throws(
-    () => runner.validate({ command: 'pwd', cwd: '/etc' }),
+    () => runner.validate({ shell: 'sh', command: 'pwd', cwd: '/etc' }),
     (err) => err instanceof ExecRejectedError && err.code === 'invalid_cwd'
   );
 });
@@ -40,7 +40,7 @@ test('ExecRunner streams stdout/stderr and returns summary', async () => {
   const runner = new ExecRunner(config);
   const events = [];
   const summary = await runner.run(
-    { command: 'printf out; printf err >&2', cwd: '/tmp' },
+    { shell: 'sh', command: 'printf out; printf err >&2', cwd: '/tmp' },
     (event) => events.push(event)
   );
   assert.equal(summary.code, 0);
@@ -62,7 +62,7 @@ test('ExecRunner truncates forwarding but still drains output', async () => {
   const runner = new ExecRunner(config);
   const events = [];
   const summary = await runner.run(
-    { command: 'printf 1234567890abcdefghij', cwd: '/tmp', max_output_bytes: 16 },
+    { shell: 'sh', command: 'printf 1234567890abcdefghij', cwd: '/tmp', max_output_bytes: 16 },
     (event) => events.push(event)
   );
   assert.equal(summary.code, 0);
@@ -85,7 +85,7 @@ test('ExecRunner times out and kills process group', async () => {
   const runner = new ExecRunner(config);
   const events = [];
   const summary = await runner.run(
-    { command: 'sleep 5', cwd: '/tmp', timeout_seconds: 1 },
+    { shell: 'sh', command: 'sleep 5', cwd: '/tmp', timeout_seconds: 1 },
     (event) => events.push(event)
   );
   assert.equal(summary.timed_out, true);

@@ -15,9 +15,9 @@ type UnknownRecord = Record<string, unknown>;
 interface Histogram { count: number; sum: number; buckets: number[]; }
 
 export { ExecRejectedError } from './execution-types.js';
-export type { ExecEvent, ExecutionSpec, ValidatedExecRequest, ExecSummary, RunOptions, GetStatusOptions, ExecMetrics } from './execution-types.js';
+export type { ExecEvent, ExecutionShell, ExecutionSpec, ValidatedExecRequest, ExecSummary, RunOptions, GetStatusOptions, ExecMetrics } from './execution-types.js';
 import { ExecRejectedError } from './execution-types.js';
-import type { ExecEvent, ExecutionSpec, ValidatedExecRequest, ExecSummary, RunOptions, GetStatusOptions, ExecMetrics } from './execution-types.js';
+import type { ExecEvent, ExecutionShell, ExecutionSpec, ValidatedExecRequest, ExecSummary, RunOptions, GetStatusOptions, ExecMetrics } from './execution-types.js';
 
 interface ManagedJob {
   record: ExecutionRecord;
@@ -114,6 +114,11 @@ export class ExecRunner {
     const command = typeof req.command === 'string' ? req.command.trim() : '';
     if (!command) throw new ExecRejectedError('invalid_command', 'command must be a non-empty string');
 
+    if (req.shell !== 'sh' && req.shell !== 'bash') {
+      throw new ExecRejectedError('invalid_shell', 'shell is required and must be one of: sh, bash');
+    }
+    const shell: ExecutionShell = req.shell;
+
     const cwdInput = String(req.cwd || this.config.defaultCwd);
     if (!isAbsolute(cwdInput)) throw new ExecRejectedError('invalid_cwd', `cwd must be an absolute path: ${cwdInput}`);
     const cwd = resolve(cwdInput);
@@ -152,7 +157,7 @@ export class ExecRunner {
       : null;
 
     return {
-      command, cwd, timeoutSeconds, maxOutputBytes, env, label, commandSha256,
+      command, shell, cwd, timeoutSeconds, maxOutputBytes, env, label, commandSha256,
       commandLength: Buffer.byteLength(command, 'utf8'), commandPreview,
       allowedCwds: this.config.allowedCwds, killGraceSeconds: this.config.killGraceSeconds
     };
@@ -226,6 +231,7 @@ export class ExecRunner {
       executionClass,
       label: spec.label,
       cwd: spec.cwd,
+      shell: spec.shell,
       commandPreview: spec.commandPreview,
       commandSha256: spec.commandSha256,
       commandLength: spec.commandLength,

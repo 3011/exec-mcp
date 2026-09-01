@@ -54,7 +54,13 @@ test('MCP exec tool schema includes operational context', async () => {
     assert.equal(tool.annotations.openWorldHint, true);
     assert.equal(startExec.title, 'Start asynchronous remote job');
     assert.deepEqual(startExec.outputSchema.required, ['exec_id', 'status', 'label', 'created_at', 'queue_position', 'task_handle']);
-    assert.deepEqual(startExec.inputSchema.required, ['command', 'task_handle']);
+    assert.deepEqual(startExec.inputSchema.required, ['command', 'shell', 'task_handle']);
+    assert.deepEqual(tool.inputSchema.properties.shell.enum, ['sh', 'bash']);
+    assert.deepEqual(startExec.inputSchema.properties.shell.enum, ['sh', 'bash']);
+    assert.equal(tool.inputSchema.required.includes('shell'), true);
+    assert.match(tool.inputSchema.properties.shell.description, /Required shell interpreter/);
+    assert.match(tool.inputSchema.properties.shell.description, /Bash-specific syntax/);
+    assert.match(tool.inputSchema.properties.shell.description, /\/bin\/bash -c/);
     assert.match(beginTask.description, /Different ChatGPT windows should create different task handles/);
     assert.match(startExec.description, /registered/);
     assert.match(startExec.description, /queued/);
@@ -157,16 +163,26 @@ test('MCP exec call returns structured content matching output schema', async ()
   const base = `http://127.0.0.1:${server.address().port}`;
 
   try {
-    const missing = await mcpCall(base, -1, 'exec', { command: 'printf missing-handle', cwd: '/tmp' });
+    const missing = await mcpCall(base, -1, 'exec', { shell: 'sh', command: 'printf missing-handle', cwd: '/tmp' });
     assert.equal(missing.result.isError, true);
     assert.equal(missing.result.structuredContent.code, 'invalid_task_handle');
     assert.match(missing.result.content[0].text, /begin_task/);
 
     const begun = await mcpCall(base, 0, 'begin_task', { label: 'schema execution' });
     const taskHandle = begun.result.structuredContent.task_handle;
-    const result = await mcpCall(base, 1, 'exec', {
+
+    const missingShell = await mcpCall(base, 1, 'exec', {
       task_handle: taskHandle,
-      command: 'printf hello',
+      command: 'printf missing-shell',
+      cwd: '/tmp'
+    });
+    assert.equal(missingShell.result.isError, true);
+    assert.equal(missingShell.result.structuredContent.code, 'invalid_shell');
+    assert.match(missingShell.result.content[0].text, /shell is required/);
+
+    const result = await mcpCall(base, 2, 'exec', {
+      task_handle: taskHandle,
+      shell: 'sh', command: 'printf hello',
       cwd: '/tmp',
       timeout_seconds: 5,
       max_output_bytes: 1024

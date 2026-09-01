@@ -38,7 +38,7 @@ fi
 curl -fsS -N \
   -H 'content-type: application/json' \
   -H 'accept: text/event-stream' \
-  --data '{"command":"echo hello; echo warn >&2","cwd":"/tmp"}' \
+  --data '{"command":"echo hello; echo warn >&2","shell":"sh","cwd":"/tmp"}' \
   "http://127.0.0.1:${PORT_VALUE}/exec" >"$OUT_FILE"
 
 grep -q 'event: stdout' "$OUT_FILE"

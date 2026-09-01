@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-01
+
+### Changed
+
+- **Breaking:** `exec` and `start_exec` now require an explicit `shell` value on every execution request. Only `sh` and `bash` are accepted; omitted or unsupported values are rejected before spawn.
+- `shell: "sh"` executes the submitted command with `/bin/sh -c`; `shell: "bash"` executes it with `/bin/bash -c`. No login shell, interactive shell, automatic shell detection, arbitrary interpreter path, or default shell is used.
+- Runtime execution details now expose the selected shell as an observable execution fact.
+- `command_sha256` remains a fingerprint of the command text only; selecting a different shell does not change its existing semantics.
+
+
 ## [0.8.1] - 2026-08-31
 
 ### Changed

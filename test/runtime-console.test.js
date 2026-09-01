@@ -97,6 +97,7 @@ test('Runtime Console serves dependency-free assets with strict read-only securi
     assert.doesNotMatch(script, /Advanced metadata/);
     assert.match(script, /summary-metric-grid/);
     assert.match(script, /details-card/);
+    assert.match(script, /metaLine\('Shell', observation\.shell \|\| 'Unavailable'\)/);
     assert.match(script, /captureDetailScroll/);
     assert.match(script, /function isNearLogBottom\(pre\)/);
     assert.match(script, /const shouldFollow = isNearLogBottom\(pre\)/);
@@ -124,6 +125,7 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
     const started = await mcpCall(base, 901, 'start_exec', {
       task_handle: taskHandle,
       command: 'printf "hello-runtime\\n%s\\n" "$RUNTIME_SECRET"; sleep 0.12; printf "done\\n"',
+      shell: 'bash',
       cwd: '/tmp',
       env: { RUNTIME_SECRET: secret },
       label: 'runtime-observer-test'
@@ -150,6 +152,7 @@ test('Runtime API correlates an MCP start_exec with origin, lifecycle trace, act
     assert.equal(detail.found, true);
     assert.equal(detail.task.status, 'completed');
     assert.equal(detail.observation.origin.task_handle, taskHandle);
+    assert.equal(detail.observation.shell, 'bash');
     assert.equal(detail.task.task_handle, taskHandle);
     assert.equal(detail.task_context.task_handle, taskHandle);
     assert.ok(detail.observation.last_activity_at);
@@ -226,20 +229,20 @@ test('explicit task handles isolate concurrent ChatGPT task groups and reject un
 
     const unknown = await mcpCall(base, 1002, 'start_exec', {
       task_handle: 'task-11111111-1111-4111-8111-111111111111',
-      command: 'true', cwd: '/tmp'
+      shell: 'sh', command: 'true', cwd: '/tmp'
     }, sessionA);
     assert.equal(unknown.result.isError, true);
     assert.equal(unknown.result.structuredContent.code, 'unknown_task_handle');
     assert.match(unknown.result.content[0].text, /call begin_task/);
 
     const a1 = await mcpCall(base, 1003, 'start_exec', {
-      task_handle: taskA.task_handle, command: 'sleep 0.08; printf A1', cwd: '/tmp', label: 'A1'
+      task_handle: taskA.task_handle, shell: 'sh', command: 'sleep 0.08; printf A1', cwd: '/tmp', label: 'A1'
     }, sessionA);
     const a2 = await mcpCall(base, 1004, 'start_exec', {
-      task_handle: taskA.task_handle, command: 'sleep 0.08; printf A2', cwd: '/tmp', label: 'A2'
+      task_handle: taskA.task_handle, shell: 'sh', command: 'sleep 0.08; printf A2', cwd: '/tmp', label: 'A2'
     }, sessionA);
     const b1 = await mcpCall(base, 2002, 'start_exec', {
-      task_handle: taskB.task_handle, command: 'sleep 0.08; printf B1', cwd: '/tmp', label: 'B1'
+      task_handle: taskB.task_handle, shell: 'sh', command: 'sleep 0.08; printf B1', cwd: '/tmp', label: 'B1'
     }, sessionB);
 
     for (const result of [a1, a2, b1]) assert.equal(result.result.isError, false);

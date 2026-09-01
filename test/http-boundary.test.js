@@ -59,7 +59,7 @@ test('HTTP invalid cwd returns SSE error event', async () => {
     const resp = await fetch(`${base}/exec`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ command: 'pwd', cwd: '/etc' })
+      body: JSON.stringify({ shell: 'sh', command: 'pwd', cwd: '/etc' })
     });
     assert.equal(resp.status, 200);
     const events = parseSse(await resp.text());
@@ -73,12 +73,12 @@ test('HTTP metrics include rejection and exit counters', async () => {
     await fetch(`${base}/exec`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ command: 'exit 3', cwd: '/tmp' })
+      body: JSON.stringify({ shell: 'sh', command: 'exit 3', cwd: '/tmp' })
     }).then((r) => r.text());
     await fetch(`${base}/exec`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ command: 'pwd', cwd: '/etc' })
+      body: JSON.stringify({ shell: 'sh', command: 'pwd', cwd: '/etc' })
     }).then((r) => r.text());
     const metrics = await fetch(`${base}/metrics`).then((r) => r.text());
     assert.match(metrics, /exec_mcp_exit_code_total\{code="3"\} 1/);
@@ -99,7 +99,7 @@ test('HTTP client abort kills running command and decrements active count', asyn
     const promise = fetch(`${base}/exec`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ command: 'sleep 5', cwd: '/tmp', timeout_seconds: 10 }),
+      body: JSON.stringify({ shell: 'sh', command: 'sleep 5', cwd: '/tmp', timeout_seconds: 10 }),
       signal: ac.signal
     }).catch((err) => err);
     await new Promise((resolve) => setTimeout(resolve, 100));

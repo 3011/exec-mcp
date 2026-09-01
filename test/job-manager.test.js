@@ -65,7 +65,7 @@ async function waitFor(check, timeoutMs = 5000) {
 
 test('start_exec registers a queryable job before returning', async () => {
   await withServer({}, async (base) => {
-    const started = await mcp(base, 1, 'start_exec', { command: 'sleep 0.2; printf done', label: 'queryable' });
+    const started = await mcp(base, 1, 'start_exec', { shell: 'sh', command: 'sleep 0.2; printf done', label: 'queryable' });
     assert.equal(started.result.isError, false);
     const info = started.result.structuredContent;
     assert.match(info.exec_id, /^exec-/);
@@ -80,8 +80,8 @@ test('start_exec registers a queryable job before returning', async () => {
 
 test('async pool queues excess jobs and queued jobs do not consume slots', async () => {
   await withServer({ ASYNC_MAX_CONCURRENT_EXECS: '1', GLOBAL_MAX_CONCURRENT_EXECS: '2' }, async (base) => {
-    const a = (await mcp(base, 1, 'start_exec', { command: 'sleep 0.4', label: 'a' })).result.structuredContent;
-    const b = (await mcp(base, 2, 'start_exec', { command: 'sleep 0.4', label: 'b' })).result.structuredContent;
+    const a = (await mcp(base, 1, 'start_exec', { shell: 'sh', command: 'sleep 0.4', label: 'a' })).result.structuredContent;
+    const b = (await mcp(base, 2, 'start_exec', { shell: 'sh', command: 'sleep 0.4', label: 'b' })).result.structuredContent;
 
     const list = await waitFor(async () => {
       const value = (await mcp(base, 3, 'list_active_execs')).result.structuredContent;
@@ -103,8 +103,8 @@ test('async pool queues excess jobs and queued jobs do not consume slots', async
 
 test('queued timeout starts when execution starts, not while waiting', async () => {
   await withServer({ ASYNC_MAX_CONCURRENT_EXECS: '1', GLOBAL_MAX_CONCURRENT_EXECS: '1', MAX_TIMEOUT_SECONDS: '3' }, async (base) => {
-    const first = (await mcp(base, 1, 'start_exec', { command: 'sleep 1.2', timeout_seconds: 2 })).result.structuredContent;
-    const second = (await mcp(base, 2, 'start_exec', { command: 'sleep 0.1; printf ok', timeout_seconds: 1 })).result.structuredContent;
+    const first = (await mcp(base, 1, 'start_exec', { shell: 'sh', command: 'sleep 1.2', timeout_seconds: 2 })).result.structuredContent;
+    const second = (await mcp(base, 2, 'start_exec', { shell: 'sh', command: 'sleep 0.1; printf ok', timeout_seconds: 1 })).result.structuredContent;
     const queued = (await mcp(base, 3, 'get_exec_status', { exec_id: second.exec_id })).result.structuredContent;
     assert.equal(queued.task.status, 'queued');
     await mcp(base, 4, 'get_exec_status', { exec_id: first.exec_id, wait_seconds: 2 });
@@ -116,8 +116,8 @@ test('queued timeout starts when execution starts, not while waiting', async () 
 
 test('cancel_exec terminalizes queued jobs and terminal state is immutable', async () => {
   await withServer({ ASYNC_MAX_CONCURRENT_EXECS: '1', GLOBAL_MAX_CONCURRENT_EXECS: '1' }, async (base) => {
-    const first = (await mcp(base, 1, 'start_exec', { command: 'sleep 0.5' })).result.structuredContent;
-    const queued = (await mcp(base, 2, 'start_exec', { command: 'sleep 0.5' })).result.structuredContent;
+    const first = (await mcp(base, 1, 'start_exec', { shell: 'sh', command: 'sleep 0.5' })).result.structuredContent;
+    const queued = (await mcp(base, 2, 'start_exec', { shell: 'sh', command: 'sleep 0.5' })).result.structuredContent;
     assert.equal((await mcp(base, 3, 'cancel_exec', { exec_id: queued.exec_id })).result.structuredContent.result, 'accepted');
     const status = (await mcp(base, 4, 'get_exec_status', { exec_id: queued.exec_id })).result.structuredContent;
     assert.equal(status.task.status, 'cancelled');
@@ -130,7 +130,7 @@ test('cancel_exec terminalizes queued jobs and terminal state is immutable', asy
 
 test('get_exec_status returns incremental stdout/stderr with independent cursors', async () => {
   await withServer({}, async (base) => {
-    const started = (await mcp(base, 1, 'start_exec', { command: 'printf first; printf err1 >&2; sleep 0.25; printf second; printf err2 >&2' })).result.structuredContent;
+    const started = (await mcp(base, 1, 'start_exec', { shell: 'sh', command: 'printf first; printf err1 >&2; sleep 0.25; printf second; printf err2 >&2' })).result.structuredContent;
     const first = await waitFor(async () => {
       const value = (await mcp(base, 2, 'get_exec_status', { exec_id: started.exec_id, max_output_bytes: 32 })).result.structuredContent;
       return value.stdout.includes('first') && value.stderr.includes('err1') ? value : null;
@@ -158,7 +158,7 @@ test('env values never appear in list, status metadata, history, or retained job
   await withServer({}, async (base) => {
     const secret = 'super-secret-env-value-123';
     const started = (await mcp(base, 1, 'start_exec', {
-      command: 'printf "%s" "$SECRET_TOKEN"',
+      shell: 'sh', command: 'printf "%s" "$SECRET_TOKEN"',
       env: { SECRET_TOKEN: secret },
       label: 'env-redaction'
     })).result.structuredContent;
@@ -178,11 +178,11 @@ test('async_max leaves sync capacity available while respecting global_max', asy
     ASYNC_MAX_CONCURRENT_EXECS: '2',
     GLOBAL_MAX_CONCURRENT_EXECS: '4'
   }, async (base, { runner }) => {
-    const a = (await mcp(base, 1, 'start_exec', { command: 'sleep 0.4' })).result.structuredContent;
-    const b = (await mcp(base, 2, 'start_exec', { command: 'sleep 0.4' })).result.structuredContent;
+    const a = (await mcp(base, 1, 'start_exec', { shell: 'sh', command: 'sleep 0.4' })).result.structuredContent;
+    const b = (await mcp(base, 2, 'start_exec', { shell: 'sh', command: 'sleep 0.4' })).result.structuredContent;
     await waitFor(() => runner.active === 2);
 
-    const sync = mcp(base, 3, 'exec', { command: 'printf sync-ok' });
+    const sync = mcp(base, 3, 'exec', { shell: 'sh', command: 'printf sync-ok' });
     await waitFor(() => runner.active === 3);
     assert.ok(runner.active <= 4);
     const syncResult = await sync;
@@ -195,7 +195,7 @@ test('async_max leaves sync capacity available while respecting global_max', asy
 
 test('status distinguishes response pagination from permanent log truncation', async () => {
   await withServer({ JOB_LOG_BYTES: '32', STATUS_DEFAULT_MAX_OUTPUT_BYTES: '8' }, async (base) => {
-    const started = (await mcp(base, 101, 'start_exec', { command: "printf 'abcdefghijklmnopqrstuvwxyz0123456789'" })).result.structuredContent;
+    const started = (await mcp(base, 101, 'start_exec', { shell: 'sh', command: "printf 'abcdefghijklmnopqrstuvwxyz0123456789'" })).result.structuredContent;
     const done = (await mcp(base, 102, 'get_exec_status', { exec_id: started.exec_id, wait_seconds: 2, max_output_bytes: 8 })).result.structuredContent;
     assert.equal(done.task.status, 'completed');
     assert.equal(done.stdout_log_truncated, true, 'old stdout bytes were permanently discarded by the retained log limit');
@@ -215,7 +215,7 @@ test('status distinguishes response pagination from permanent log truncation', a
 
 test('wait_seconds above the server hard limit is rejected', async () => {
   await withServer({}, async (base) => {
-    const started = (await mcp(base, 111, 'start_exec', { command: 'sleep 0.2' })).result.structuredContent;
+    const started = (await mcp(base, 111, 'start_exec', { shell: 'sh', command: 'sleep 0.2' })).result.structuredContent;
     const status = await mcp(base, 112, 'get_exec_status', { exec_id: started.exec_id, wait_seconds: 31 });
     assert.equal(status.result.isError, true);
     assert.match(status.result.content[0].text, /wait_seconds_too_large/);
@@ -225,9 +225,9 @@ test('wait_seconds above the server hard limit is rejected', async () => {
 
 test('queue limit rejects only after all running and queued capacity is occupied', async () => {
   await withServer({ ASYNC_MAX_CONCURRENT_EXECS: '1', GLOBAL_MAX_CONCURRENT_EXECS: '1', MAX_QUEUED_EXECS: '1' }, async (base) => {
-    const running = (await mcp(base, 121, 'start_exec', { command: 'sleep 0.5' })).result.structuredContent;
-    const queued = (await mcp(base, 122, 'start_exec', { command: 'sleep 0.5' })).result.structuredContent;
-    const rejected = await mcp(base, 123, 'start_exec', { command: 'printf rejected' });
+    const running = (await mcp(base, 121, 'start_exec', { shell: 'sh', command: 'sleep 0.5' })).result.structuredContent;
+    const queued = (await mcp(base, 122, 'start_exec', { shell: 'sh', command: 'sleep 0.5' })).result.structuredContent;
+    const rejected = await mcp(base, 123, 'start_exec', { shell: 'sh', command: 'printf rejected' });
     assert.equal(rejected.result.isError, true);
     assert.match(rejected.result.content[0].text, /exec_queue_full/);
     const list = (await mcp(base, 124, 'list_active_execs')).result.structuredContent;
@@ -242,7 +242,7 @@ test('retained job logs redact an env value split across output chunks', async (
   await withServer({}, async (base) => {
     const value = 'abcdef';
     const started = (await mcp(base, 131, 'start_exec', {
-      command: "printf 'abc'; sleep 0.15; printf 'def'",
+      shell: 'sh', command: "printf 'abc'; sleep 0.15; printf 'def'",
       env: { TEST_VALUE: value }
     })).result.structuredContent;
     const done = (await mcp(base, 132, 'get_exec_status', {

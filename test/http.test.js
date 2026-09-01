@@ -27,7 +27,7 @@ test('HTTP /healthz and /exec SSE work', async () => {
   const resp = await fetch(`http://127.0.0.1:${port}/exec`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-    body: JSON.stringify({ command: 'echo hello', cwd: '/tmp' })
+    body: JSON.stringify({ shell: 'sh', command: 'echo hello', cwd: '/tmp' })
   });
   assert.equal(resp.status, 200);
   const text = await resp.text();

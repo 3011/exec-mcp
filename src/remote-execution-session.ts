@@ -422,6 +422,7 @@ function spawnCommand(config: ExecMcpConfig, req: ExecutionSpec, execId: string)
     protocol: REMOTE_SUPERVISOR_PROTOCOL_VERSION,
     exec_id: execId,
     command: req.command,
+    shell: req.shell,
     cwd: req.cwd,
     timeout_seconds: req.timeoutSeconds,
     kill_grace_seconds: req.killGraceSeconds,
